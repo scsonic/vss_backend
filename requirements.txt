@@ -1,0 +1,21 @@
+# Video search + VLM 範例（Apple Silicon / MacBook）
+# 對應 NVIDIA VSS 的精簡替代方案，詳見 nvidia_vss_flow.md
+
+# CLIP embedding（text <-> image 跨模態檢索），跑在 MPS
+open_clip_torch>=2.24.0
+torch>=2.2.0
+Pillow>=10.0.0
+
+# 向量資料庫（取代 Milvus）
+chromadb>=0.5.0
+
+# VLM = Cosmos-Reason2-8B GGUF，由 llama.cpp(llama-server) 提供，不經 pip。
+# （不再用 mlx-vlm；跨 Mac/Ubuntu 一致走 llama-server 的 OpenAI 相容 API。）
+
+# 工具
+numpy
+tqdm
+
+# 網頁 (FastAPI 測試站)
+fastapi
+uvicorn[standard]

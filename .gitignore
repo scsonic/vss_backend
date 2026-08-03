@@ -1,0 +1,25 @@
+# 虛擬環境
+.venv/
+__pycache__/
+*.pyc
+
+# 模型權重（很大，由 open_clip/curl 自行下載，見 ubuntu.sh）
+models/
+
+# 影片與影格快取（大檔，不進 repo）
+video/
+frames/
+frames_hires/
+*.mp4
+
+# 向量資料庫（由 ingest.py 產生）
+db/
+
+# 執行期產物
+*.log
+last_ingest.json
+qtun.log
+tunnel.log
+web.log
+vlm.log
+.DS_Store
