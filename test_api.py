@@ -16,7 +16,8 @@ QUERY = sys.argv[2] if len(sys.argv) > 2 else "person walking on street"
 def post(path: str, body: dict, timeout: int = 120) -> dict:
     req = urllib.request.Request(
         BASE + path, data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        # 預設的 Python-urllib UA 會被 Cloudflare bot 防護擋 403，換成一般瀏覽器 UA。
+        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 test_api.py"},
     )
     t = time.time()
     with urllib.request.urlopen(req, timeout=timeout) as r:

@@ -8,11 +8,13 @@
 
 啟動： bash serve_web.sh   （需先 bash serve_vlm.sh 開 Cosmos 服務）
 """
+import json
 import re
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -22,6 +24,11 @@ from embedder import ClipEmbedder
 from store import VectorStore
 
 app = FastAPI(title="Video Search + Cosmos-Reason2")
+
+# 開放給所有來源呼叫（純 JSON API，不用 cookie，開 * 沒有 CSRF 疑慮）。
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+)
 
 # ---- 影格靜態服務 ----
 config.FRAMES_DIR.mkdir(parents=True, exist_ok=True)
@@ -63,10 +70,34 @@ def get_vlm():
     return _vlm
 
 
-def frame_url(path: str) -> str:
+def public_base(request: Request) -> str:
+    """求出對外可見的完整 origin（scheme+host），供組「完整 URL」用。
+
+    本機直連時用 request 自己的 scheme/host；經 cloudflared 通道時，
+    通道對外是 https 但對內轉給 uvicorn 是 http，所以優先看反代加的
+    X-Forwarded-Proto / Cf-Visitor 標頭來還原真正的 https。
+    """
+    scheme = request.headers.get("x-forwarded-proto")
+    if not scheme:
+        cfv = request.headers.get("cf-visitor")
+        if cfv:
+            try:
+                scheme = json.loads(cfv).get("scheme")
+            except (json.JSONDecodeError, AttributeError):
+                scheme = None
+    scheme = scheme or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}"
+
+
+def frame_url(path: str, base: str = "") -> str:
     # DB 存的是絕對路徑（可能是別台機器的），只取「<影片資料夾>/<檔名>」對應到 /frames 掛載。
     p = Path(path)
-    return f"/frames/{p.parent.name}/{p.name}"
+    return f"{base}/frames/{p.parent.name}/{p.name}"
+
+
+def video_url(video: str, base: str = "") -> str:
+    return f"{base}/videos/{video}"
 
 
 # ========== API ==========
@@ -82,7 +113,7 @@ def _frame_idx(path: str, t_sec: float) -> int:
     return int(round(t_sec / config.FRAME_INTERVAL_SEC)) + 1
 
 
-def _cluster_hits(hits: list[dict], gap: int) -> list[dict]:
+def _cluster_hits(hits: list[dict], gap: int, base: str = "") -> list[dict]:
     """同影片內、frame 編號相鄰(差<=gap)的命中串成一筆；每筆取分數最高者為代表。"""
     from collections import defaultdict
     by_video = defaultdict(list)
@@ -109,7 +140,8 @@ def _cluster_hits(hits: list[dict], gap: int) -> list[dict]:
         out.append({
             "video": best["video"], "timecode": best["timecode"], "t_sec": best["t_sec"],
             "path": best["path"], "score": round(best["score"], 3),
-            "thumb": frame_url(best["path"]), "filename": Path(best["path"]).name,
+            "thumb": frame_url(best["path"], base), "filename": Path(best["path"]).name,
+            "mp4": video_url(best["video"], base),
             "span": f"{ts[0]['timecode']}~{ts[-1]['timecode']}" if len(c) > 1 else ts[0]["timecode"],
             "merged": len(c),
         })
@@ -118,7 +150,7 @@ def _cluster_hits(hits: list[dict], gap: int) -> list[dict]:
 
 
 @app.post("/api/search")
-def api_search(req: SearchReq):
+def api_search(req: SearchReq, request: Request):
     store = get_store()
     if store.count() == 0:
         return JSONResponse({"error": "資料庫是空的"}, status_code=400)
@@ -126,7 +158,7 @@ def api_search(req: SearchReq):
     # 多撈一個 pool 再做「相鄰影格合併」，最後回 top_n 筆不同片段
     pool = min(store.count(), max(req.top_n * 8, 60))
     hits = store.query(q_emb, pool)
-    clustered = _cluster_hits(hits, config.MERGE_FRAME_GAP)
+    clustered = _cluster_hits(hits, config.MERGE_FRAME_GAP, public_base(request))
     cands = clustered[:max(1, req.top_n)]
     sid = uuid.uuid4().hex
     SESSIONS[sid] = {"query": req.query, "cands": cands, "messages": [], "explained": False}
@@ -138,7 +170,7 @@ class SidReq(BaseModel):
 
 
 @app.post("/api/explain")
-def api_explain(req: SidReq):
+def api_explain(req: SidReq, request: Request):
     s = SESSIONS.get(req.session_id)
     if not s:
         return JSONResponse({"error": "session 不存在（可能已重新整理）"}, status_code=404)
@@ -149,7 +181,9 @@ def api_explain(req: SidReq):
     result = vlm.explain(s["query"], s["cands"])
     s["messages"] = result["messages"]
     s["explained"] = True
-    kept = [{"video": c["video"], "timecode": c["timecode"], "thumb": frame_url(c.get("hires", c["path"]))}
+    base = public_base(request)
+    kept = [{"video": c["video"], "timecode": c["timecode"],
+             "thumb": frame_url(c.get("hires", c["path"]), base), "mp4": video_url(c["video"], base)}
             for c in result["kept"]]
     caps = [{"video": c["video"], "timecode": c["timecode"], "caption": c.get("caption", "")}
             for c in result["candidates"]]
@@ -177,7 +211,7 @@ def api_chat(req: ChatReq):
 
 
 @app.get("/api/dbinfo")
-def api_dbinfo():
+def api_dbinfo(request: Request):
     store = get_store()
     r = store.collection.get(include=["metadatas"])
     metas = r["metadatas"]
@@ -185,13 +219,15 @@ def api_dbinfo():
     per = defaultdict(list)
     for m in metas:
         per[m["video"]].append(m)
+    base = public_base(request)
     videos = []
     for v, ms in sorted(per.items()):
         ms_sorted = sorted(ms, key=lambda x: x["t_sec"])
         videos.append({
             "video": v, "frames": len(ms),
             "duration": ms_sorted[-1]["timecode"],
-            "cover": frame_url(ms_sorted[0]["path"]),
+            "cover": frame_url(ms_sorted[0]["path"], base),
+            "mp4": video_url(v, base),
         })
     dim = len(store.collection.get(limit=1, include=["embeddings"])["embeddings"][0]) if metas else 0
     return {
@@ -391,6 +427,8 @@ nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px
 .card .meta{padding:8px;font-size:13px;line-height:1.6}
 .panel{background:#161922;border:1px solid #262b36;border-radius:12px;padding:16px;margin-top:16px}
 .k{color:#8a93a3;display:inline-block;width:120px} b{color:#fff}
+pre{background:#0d0f14;border:1px solid #262b36;border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+code{color:#e0a34a} h3{margin-bottom:10px} .api h4{margin:16px 0 6px}
 </style></head><body>
 <nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/dbinfo">資料庫資訊</a></nav>
 <div class="wrap">
@@ -398,6 +436,7 @@ nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px
 <div id="sys"></div>
 <h2>影片清單</h2>
 <div id="vids" class="grid"></div>
+<div id="api" class="panel api"></div>
 </div>
 <script>
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
@@ -416,8 +455,31 @@ async function load(){
     +'<div><span class="k">抽格間隔</span>每 '+d.params.frame_interval_sec+' 秒；送 VLM 解析度上限 '+d.params.vlm_img_max_px+'px</div></div>';
   let h='';
   d.videos.forEach(v=>{h+='<div class="card"><img loading="lazy" src="'+v.cover+'">'
-    +'<div class="meta"><b>'+esc(v.video)+'</b><br>影格 '+v.frames+' 張<br>長度 ~'+v.duration+'</div></div>'});
+    +'<div class="meta"><b>'+esc(v.video)+'</b><br>影格 '+v.frames+' 張<br>長度 ~'+v.duration
+    +'<br><a href="'+v.mp4+'" target="_blank">原始 mp4 ↗</a></div></div>'});
   document.getElementById('vids').innerHTML=h;
+
+  const origin=location.origin;
+  document.getElementById('api').innerHTML=
+    '<h3>API 呼叫方式</h3>'
+    +'<p class="k" style="width:auto">開放 CORS 給所有來源；只需這兩支 API 就能完成「搜尋 → Cosmos 解讀」全流程。'
+    +'回傳的 thumb/mp4 欄位都是可直接打開的完整 URL。</p>'
+    +'<div class="api">'
+    +'<h4>1) POST /api/search — 語意搜尋影格</h4>'
+    +'<pre>curl -X POST '+origin+'/api/search \\\n'
+    +'  -H "Content-Type: application/json" \\\n'
+    +'  -d \\'{"query": "有沒有人在亂丟垃圾", "top_n": 10}\\'</pre>'
+    +'<p class="k" style="width:auto">回應：<code>{session_id, results: [{video, timecode, t_sec, score, thumb, mp4, filename, span, merged}]}</code>'
+    +'　— <code>session_id</code> 要留著給下一步 /api/explain 用。</p>'
+    +'<h4>2) POST /api/explain — 用 Cosmos Reason 解讀剛才的搜尋結果</h4>'
+    +'<pre>curl -X POST '+origin+'/api/explain \\\n'
+    +'  -H "Content-Type: application/json" \\\n'
+    +'  -d \\'{"session_id": "上一步拿到的 session_id"}\\'</pre>'
+    +'<p class="k" style="width:auto">回應：<code>{answer, kept: [{video, timecode, thumb, mp4}], captions, trace, timings, '
+    +'usage: {prompt_tokens, completion_tokens, total_tokens, tokens_per_sec}}</code>'
+    +'　— <code>answer</code> 是繁中總結；<code>usage</code> 是這次呼叫 Cosmos 用掉的 token 數與生成速度。'
+    +'此步驟需要 VLM 服務（serve_vlm.sh）已啟動，可能需數十秒到數分鐘。</p>'
+    +'</div>';
 }
 load();
 </script></body></html>"""
