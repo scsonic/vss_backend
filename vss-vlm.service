@@ -1,0 +1,20 @@
+[Unit]
+Description=Cosmos-Reason2-8B VLM server (llama-server, vss_test)
+After=network.target
+
+[Service]
+Type=simple
+User=toyota-004
+Group=toyota-004
+WorkingDirectory=/home/toyota-004/Desktop/vss_test
+# -c 16384: GPU is shared with another process (~6.8GB used by an unrelated vllm
+# job), so the full 32768 context's KV cache doesn't fit alongside the model
+# weights. Raise back to 32768 (drop the -c override) if that GPU memory frees up.
+ExecStart=/bin/bash /home/toyota-004/Desktop/vss_test/serve_vlm.sh -c 16384
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

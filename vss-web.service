@@ -1,0 +1,15 @@
+[Unit]
+Description=Video Search + VLM FastAPI web server (vss_test)
+After=network.target
+
+[Service]
+Type=simple
+User=toyota-004
+Group=toyota-004
+WorkingDirectory=/home/toyota-004/Desktop/vss_test
+ExecStart=/home/toyota-004/Desktop/vss_test/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
