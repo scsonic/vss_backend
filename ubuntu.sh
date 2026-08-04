@@ -12,10 +12,9 @@ REMOTE_DIR="${REMOTE_DIR:-vss_test}"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> 1/2 rsync 專案到 ${REMOTE}:~/${REMOTE_DIR}"
-# 含 mp4(遠端 Cosmos 用原始 mp4 擷高畫質影格)；仍排除 venv/模型/高畫質快取。
 rsync -avz --progress \
   --exclude '.venv' --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
-  --exclude 'models' --exclude 'video/_frames_hires' \
+  --exclude 'models' --exclude '*.mp4' --exclude 'video/_frames_hires' \
   "${LOCAL_DIR}/" "${REMOTE}:~/${REMOTE_DIR}/"
 
 echo "==> 2/2 遠端安裝與設定（免 sudo）"
