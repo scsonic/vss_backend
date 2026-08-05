@@ -42,6 +42,6 @@ EMBED_BATCH_SIZE = 32       # 一次丟幾張到 GPU forward（越大越快、�
 TOP_K = 4                   # 最終交給 VLM 綜合的影格數（門檻過濾後）
 SEARCH_CANDIDATES = 12      # RAG 先「多撈」幾張候選，再交給 Cosmos 過濾
 SCORE_THRESHOLD = 0.20      # 相似度門檻（低於此的候選直接丟掉；DFN5B 街景約 0.2~0.35）
-MERGE_FRAME_GAP = 5         # 同影片內，相鄰影格(frame 編號差 ≤ 此值)串成同一筆結果，避免結果擠在一起
+MERGE_FRAME_GAP = 10        # 同影片內，相鄰影格(frame 編號差 ≤ 此值)串成同一筆結果，避免結果擠在一起
 LOOK_AROUND_BEFORE = 3      # look_around 預設往前看幾張
 LOOK_AROUND_AFTER = 3       # look_around 預設往後看幾張
