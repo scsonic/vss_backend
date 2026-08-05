@@ -167,7 +167,7 @@ def api_search(req: SearchReq, request: Request):
 
 class SidReq(BaseModel):
     session_id: str
-    image_size: int = 640  # 送進 LLM 前圖片長邊縮到這個值以內（只往下縮、保持比例、不放大）
+    image_size: int = 480  # 送進 LLM 前圖片長邊縮到這個值以內（只往下縮、保持比例、不放大）
 
 
 @app.post("/api/explain")
@@ -475,8 +475,8 @@ async function load(){
     +'<h4>2) POST /api/explain — 用 Cosmos Reason 解讀剛才的搜尋結果</h4>'
     +'<pre>curl -X POST '+origin+'/api/explain \\\n'
     +'  -H "Content-Type: application/json" \\\n'
-    +'  -d \\'{"session_id": "上一步拿到的 session_id", "image_size": 640}\\'</pre>'
-    +'<p class="k" style="width:auto"><code>image_size</code>（可選，預設 640）：送進 LLM 前，每張圖片長邊縮到這個'
+    +'  -d \\'{"session_id": "上一步拿到的 session_id", "image_size": 480}\\'</pre>'
+    +'<p class="k" style="width:auto"><code>image_size</code>（可選，預設 480）：送進 LLM 前，每張圖片長邊縮到這個'
     +'像素以內再送進去，加快推論；只會往下縮、保持長寬比、不會放大原圖。傳 0 或負數則不限制。</p>'
     +'<p class="k" style="width:auto">回應：<code>{answer, kept: [{video, timecode, thumb, mp4}], captions, trace, timings, '
     +'usage: {prompt_tokens, completion_tokens, total_tokens, tokens_per_sec}}</code>'

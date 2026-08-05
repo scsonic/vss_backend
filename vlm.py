@@ -213,11 +213,11 @@ class Vlm:
         answer, trace = self._tools_loop(messages, [LOOK_AROUND_TOOL], max_tokens)
         return answer, trace, self._usage_summary()
 
-    def explain(self, query: str, candidates: list[dict], image_size: int = 640) -> dict:
+    def explain(self, query: str, candidates: list[dict], image_size: int = 480) -> dict:
         """完整流程：回原片擷高畫質 → caption 候選 → 過濾 → (可 look_around) 綜合總結。
 
         image_size: 送進 LLM 前，圖片長邊縮到這個值以內（只往下縮、保持比例、不放大），
-        用來加速推論；預設 640，<=0 則視為不限制（用原圖／config.VLM_IMG_MAX_PX）。
+        用來加速推論；預設 480，<=0 則視為不限制（用原圖／config.VLM_IMG_MAX_PX）。
         回傳含 timings（各階段耗時）與 messages（對話 history，供 search.py 續問）。
         """
         self._reset_usage()
