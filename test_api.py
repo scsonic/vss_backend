@@ -51,8 +51,9 @@ if not sid:
     sys.exit(1)
 
 # 2) /api/explain — Cosmos Reason 推理（caption/filter/look_around/summarize）
+#    image_size: 送進 LLM 前圖片長邊縮到這個值以內，測試非預設值確認參數有生效。
 print()
-e, dt = post("/api/explain", {"session_id": sid}, timeout=300)
+e, dt = post("/api/explain", {"session_id": sid, "image_size": 320}, timeout=300)
 check("explain: 沒有 error", "error" not in e, e.get("error", ""))
 check("explain: answer 非空", bool(e.get("answer")), f"{dt:.2f}s")
 u = e.get("usage") or {}

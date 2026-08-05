@@ -167,6 +167,7 @@ def api_search(req: SearchReq, request: Request):
 
 class SidReq(BaseModel):
     session_id: str
+    image_size: int = 640  # 送進 LLM 前圖片長邊縮到這個值以內（只往下縮、保持比例、不放大）
 
 
 @app.post("/api/explain")
@@ -178,7 +179,7 @@ def api_explain(req: SidReq, request: Request):
         vlm = get_vlm()
     except Exception as e:
         return JSONResponse({"error": f"Cosmos 服務未啟動：{e}"}, status_code=503)
-    result = vlm.explain(s["query"], s["cands"])
+    result = vlm.explain(s["query"], s["cands"], image_size=req.image_size)
     s["messages"] = result["messages"]
     s["explained"] = True
     base = public_base(request)
@@ -474,7 +475,9 @@ async function load(){
     +'<h4>2) POST /api/explain — 用 Cosmos Reason 解讀剛才的搜尋結果</h4>'
     +'<pre>curl -X POST '+origin+'/api/explain \\\n'
     +'  -H "Content-Type: application/json" \\\n'
-    +'  -d \\'{"session_id": "上一步拿到的 session_id"}\\'</pre>'
+    +'  -d \\'{"session_id": "上一步拿到的 session_id", "image_size": 640}\\'</pre>'
+    +'<p class="k" style="width:auto"><code>image_size</code>（可選，預設 640）：送進 LLM 前，每張圖片長邊縮到這個'
+    +'像素以內再送進去，加快推論；只會往下縮、保持長寬比、不會放大原圖。傳 0 或負數則不限制。</p>'
     +'<p class="k" style="width:auto">回應：<code>{answer, kept: [{video, timecode, thumb, mp4}], captions, trace, timings, '
     +'usage: {prompt_tokens, completion_tokens, total_tokens, tokens_per_sec}}</code>'
     +'　— <code>answer</code> 是繁中總結；<code>usage</code> 是這次呼叫 Cosmos 用掉的 token 數與生成速度。'

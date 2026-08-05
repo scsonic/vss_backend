@@ -96,10 +96,14 @@ class Vlm:
         return local
 
     def _img_content(self, path: str) -> dict:
-        """讀圖 →（可選）縮到 VLM_IMG_MAX_PX → base64 data URL。None=原始解析度。"""
+        """讀圖 →（可選）縮到長邊 self._img_max_px → base64 data URL。
+
+        用 PIL thumbnail()：只會往下縮、不會放大，並保持長寬比。
+        """
         img = Image.open(path).convert("RGB")
-        if config.VLM_IMG_MAX_PX:
-            img.thumbnail((config.VLM_IMG_MAX_PX, config.VLM_IMG_MAX_PX))
+        max_px = getattr(self, "_img_max_px", None) or config.VLM_IMG_MAX_PX
+        if max_px:
+            img.thumbnail((max_px, max_px))
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=95)
         b64 = base64.b64encode(buf.getvalue()).decode()
@@ -209,12 +213,15 @@ class Vlm:
         answer, trace = self._tools_loop(messages, [LOOK_AROUND_TOOL], max_tokens)
         return answer, trace, self._usage_summary()
 
-    def explain(self, query: str, candidates: list[dict]) -> dict:
+    def explain(self, query: str, candidates: list[dict], image_size: int = 640) -> dict:
         """完整流程：回原片擷高畫質 → caption 候選 → 過濾 → (可 look_around) 綜合總結。
 
+        image_size: 送進 LLM 前，圖片長邊縮到這個值以內（只往下縮、保持比例、不放大），
+        用來加速推論；預設 640，<=0 則視為不限制（用原圖／config.VLM_IMG_MAX_PX）。
         回傳含 timings（各階段耗時）與 messages（對話 history，供 search.py 續問）。
         """
         self._reset_usage()
+        self._img_max_px = image_size if image_size and image_size > 0 else None
         timings = {}
         t = time.time()
         for c in candidates:
