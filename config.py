@@ -1,4 +1,5 @@
 """全域設定。對應 nvidia_vss_flow.md 中的精簡版參數。"""
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -45,3 +46,12 @@ SCORE_THRESHOLD = 0.20      # 相似度門檻（低於此的候選直接丟掉�
 MERGE_FRAME_GAP = 10        # 同影片內，相鄰影格(frame 編號差 ≤ 此值)串成同一筆結果，避免結果擠在一起
 LOOK_AROUND_BEFORE = 3      # look_around 預設往前看幾張
 LOOK_AROUND_AFTER = 3       # look_around 預設往後看幾張
+
+# --- Agent Search（/agent 頁面，用 OpenRouter LLM 自主決定要不要搜尋/解讀）---
+try:
+    from local_secrets import OPENROUTER_API_KEY  # 本機專用，不進 git
+except ImportError:
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731"
+AGENT_MAX_TOOL_HOPS = 6      # search_video/explain_clips 最多連續呼叫幾輪，避免無限迴圈

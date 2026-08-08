@@ -23,3 +23,6 @@ tunnel.log
 web.log
 vlm.log
 .DS_Store
+
+# API 金鑰等敏感設定（不進 repo）
+local_secrets.py

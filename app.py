@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import agent_search
 import config
 from embedder import ClipEmbedder
 from store import VectorStore
@@ -44,6 +45,8 @@ _store = None
 _vlm = None
 # session_id -> {"cands":[...], "messages":[...], "explained":bool}
 SESSIONS: dict[str, dict] = {}
+# session_id -> {"messages":[...OpenRouter對話...], "last_cands":[...最近一次 search_video 的候選...]}
+AGENT_SESSIONS: dict[str, dict] = {}
 
 
 def get_embedder():
@@ -211,6 +214,27 @@ def api_chat(req: ChatReq):
     return {"answer": answer, "trace": trace, "usage": usage}
 
 
+class AgentChatReq(BaseModel):
+    session_id: str | None = None
+    message: str
+
+
+@app.post("/api/agent_chat")
+def api_agent_chat(req: AgentChatReq, request: Request):
+    sid = req.session_id or uuid.uuid4().hex
+    session = AGENT_SESSIONS.setdefault(sid, {})
+    base = public_base(request)
+    try:
+        result = agent_search.run_agent_turn(
+            session, req.message,
+            store=get_store(), embedder=get_embedder(), get_vlm_fn=get_vlm, base=base,
+        )
+    except agent_search.AgentError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"session_id": sid, "answer": result["answer"],
+            "trace": result["trace"], "usage": result["usage"]}
+
+
 @app.get("/api/dbinfo")
 def api_dbinfo(request: Request):
     store = get_store()
@@ -254,6 +278,11 @@ def page_search():
 @app.get("/dbinfo", response_class=HTMLResponse)
 def page_dbinfo():
     return DBINFO_HTML
+
+
+@app.get("/agent", response_class=HTMLResponse)
+def page_agent():
+    return AGENT_HTML
 
 
 SEARCH_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
@@ -304,7 +333,7 @@ button:disabled{opacity:.5;cursor:default}
 #vov .stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
 #vov .stage video{max-width:94vw;max-height:86vh}
 </style></head><body>
-<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/dbinfo">資料庫資訊</a></nav>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
 <div id="lb">
   <div class="top"><span id="lb-cap"></span><span class="close" onclick="closeLb()">✕</span></div>
   <div class="stage">
@@ -431,7 +460,7 @@ nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px
 pre{background:#0d0f14;border:1px solid #262b36;border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.6}
 code{color:#e0a34a} h3{margin-bottom:10px} .api h4{margin:16px 0 6px}
 </style></head><body>
-<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/dbinfo">資料庫資訊</a></nav>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
 <div class="wrap">
 <h1>資料庫資訊</h1>
 <div id="sys"></div>
@@ -485,4 +514,91 @@ async function load(){
     +'</div>';
 }
 load();
+</script></body></html>"""
+
+
+AGENT_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Search</title><style>
+*{box-sizing:border-box} body{font-family:-apple-system,"PingFang TC",sans-serif;margin:0;background:#0f1115;color:#e6e6e6;
+  display:flex;flex-direction:column;height:100vh}
+a{color:#6cf}
+nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px solid #262b36;flex:0 0 auto}
+.wrap{max-width:820px;margin:0 auto;padding:16px;flex:1;display:flex;flex-direction:column;min-height:0;width:100%}
+h1{font-size:18px;margin:0 0 4px} .sub{color:#8a93a3;font-size:13px;margin:0 0 12px}
+.chat{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px}
+.msg{padding:10px 12px;border-radius:12px;max-width:88%;white-space:pre-wrap;line-height:1.6}
+.me{align-self:flex-end;background:#2b6cff}
+.bot{align-self:flex-start;background:#232733;border:1px solid #313747}
+.muted{color:#8a93a3;font-size:12.5px;align-self:flex-start}
+.trace{align-self:flex-start;max-width:88%;background:#161922;border:1px solid #262b36;border-radius:10px;
+  padding:8px 10px;font-size:12.5px;color:#a9b2c3}
+.trace .t-item{padding:3px 0;border-top:1px dashed #262b36}
+.trace .t-item:first-child{border-top:0}
+.trace code{color:#e0a34a}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #555;border-top-color:#6cf;border-radius:50%;
+  animation:s 1s linear infinite;vertical-align:-2px}
+@keyframes s{to{transform:rotate(360deg)}}
+.row{display:flex;gap:8px;padding:12px 0;flex:0 0 auto}
+input,button{font-size:15px;padding:10px;border-radius:8px;border:1px solid #333;background:#1b1f29;color:#eee}
+input[type=text]{flex:1} button{background:#2b6cff;border:0;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+</style></head><body>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
+<div class="wrap">
+<h1>🤖 Agent Search</h1>
+<p class="sub">直接跟 Agent 聊，它會自己判斷要不要搜尋影片、搜什麼、要不要進一步用視覺模型確認畫面。</p>
+<div id="chat" class="chat"></div>
+<div class="row">
+  <input id="msg" type="text" placeholder="例如：有沒有人在亂丟垃圾？" onkeydown="if(event.key==='Enter')send()">
+  <button id="sendbtn" onclick="send()">送出</button>
+</div>
+</div>
+<script>
+let SID=null;
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function addMsg(cls,txt){const d=document.getElementById('chat');const el=document.createElement('div');
+  el.className='msg '+cls;el.textContent=txt;d.appendChild(el);el.scrollIntoView({block:'end'});return el}
+function fmtUsage(u){if(!u||!u.total_tokens)return '';
+  return '🔢 '+u.total_tokens+' tokens（prompt '+u.prompt_tokens+' + completion '+u.completion_tokens+'）'}
+function addUsage(u){const t=fmtUsage(u); if(!t)return;
+  const d=document.getElementById('chat');const el=document.createElement('div');el.className='muted';el.textContent=t;
+  d.appendChild(el);el.scrollIntoView({block:'end'})}
+function addTrace(trace){
+  if(!trace||!trace.length)return;
+  const d=document.getElementById('chat');const el=document.createElement('div');el.className='trace';
+  el.innerHTML=trace.map(t=>{
+    if(t.tool==='search_video'){
+      const n=(t.result_brief&&t.result_brief.length)||0;
+      return '<div class="t-item">🔍 <code>search_video</code>("'+esc(t.args.query||'')+'") → 找到 '+n+' 筆</div>';
+    }
+    if(t.tool==='explain_clips'){
+      const n=(t.result_brief&&t.result_brief.kept&&t.result_brief.kept.length)||0;
+      return '<div class="t-item">👁️ <code>explain_clips</code>("'+esc(t.args.query||'')+'") → 確認 '+n+' 筆相關</div>';
+    }
+    return '<div class="t-item">⚙️ <code>'+esc(t.tool)+'</code></div>';
+  }).join('');
+  d.appendChild(el);el.scrollIntoView({block:'end'});
+}
+async function send(){
+  const inp=document.getElementById('msg');const m=inp.value.trim();if(!m)return;
+  inp.value='';addMsg('me',m);
+  const wait=addMsg('bot','思考中…（可能會呼叫搜尋/視覺解讀，較久的問題需數十秒）');
+  document.getElementById('sendbtn').disabled=true;
+  try{
+    const r=await fetch('/api/agent_chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:SID,message:m})});
+    const d=await r.json();
+    document.getElementById('sendbtn').disabled=false;
+    if(d.error){wait.textContent='⚠️ '+d.error;return}
+    SID=d.session_id;
+    wait.remove();
+    addTrace(d.trace);
+    addMsg('bot',d.answer);
+    addUsage(d.usage);
+  }catch(e){
+    document.getElementById('sendbtn').disabled=false;
+    wait.textContent='⚠️ 連線錯誤：'+e;
+  }
+}
 </script></body></html>"""
