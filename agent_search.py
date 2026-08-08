@@ -1,43 +1,46 @@
 """Agent Search：用 OpenRouter LLM（DeepSeek）當推理大腦，自主決定要不要對影片資料庫做
-CLIP 語意搜尋、要不要進一步呼叫 Cosmos Reason 實際「看」畫面，再把結果整理成回答。
+CLIP 語意搜尋、要不要往前後多看幾張影格的相似度分數，再把結果整理成回答。
 
-跟 /api/search + /api/explain 的固定流程不同：這裡搜尋幾次、搜什麼、要不要做視覺解讀，
-全部由 LLM 依對話內容自己判斷、自己下查詢字串，並用 function calling 呼叫下面兩個工具。
+這是一個「萬用影片搜尋 agent」，完全用 embedding 分數運作、不呼叫 Cosmos VLM（不做視覺解讀/caption），
+所以速度快、不吃 GPU，但回答時只能依據「視覺特徵相似度」做推論，不是「真的看過畫面」。
+
+跟 /api/search + /api/explain 的固定流程不同：這裡搜尋幾次、搜什麼、要不要往前後多看幾張，
+全部由 LLM 依對話內容自己判斷，並用 function calling 呼叫下面兩個工具。
 
 啟動：/agent 頁面 → POST /api/agent_chat，見 app.py。
 """
 import json
 import urllib.request
 import urllib.error
-from pathlib import Path
 
 import config
 
-SYSTEM_PROMPT = """你是一個「影片監視器內容搜尋助理」，背後有一個影片畫面的向量資料庫（CLIP embedding + ChromaDB）。
+SYSTEM_PROMPT = """你是一個「萬用影片搜尋助理」，背後是一個影片畫面的向量資料庫（CLIP embedding + ChromaDB）。
+你完全靠「語意向量相似度」運作，沒有視覺模型幫你看畫面內容、也看不到圖片本身 —— 你只看得到分數、時間碼、檔名。
 
 你有兩個工具可以用：
 
 1) search_video(query, top_n)
    用語意向量搜尋畫面，回傳最相關的候選片段（影片檔名、時間碼、相似度分數、合併張數）。
-   這只是「視覺特徵相近」的分數，不代表你真的看到內容、也不保證正確 —— 分數高不等於答案就對。
    query 請用「畫面看起來像什麼」來下，用簡短的名詞/場景描述（中英文皆可），
    不要照抄使用者的完整問句。例如使用者問「有沒有人闖紅燈」，你可以下
    "person crossing street against red light"、"紅綠燈路口 行人" 等，
    必要時可以連續呼叫多次、用不同角度/關鍵字去找，增加找到的機會。
 
-2) explain_clips(query, indices)
-   針對「最近一次 search_video」回傳的候選，實際呼叫視覺模型（Cosmos Reason）看畫面內容，
-   過濾掉不相關的、並產生詳細描述與總結。比 search_video 慢很多（要跑 VLM 推論），
-   indices 是 search_video 回傳結果的編號（從 1 開始，例如 [1,3,5]），不填就是全部候選。
+2) look_around(index, before, after)
+   針對「最近一次 search_video」結果裡的某一筆（index 是結果的 #編號，從 1 開始），
+   往前、往後各多看幾張影格（每張間隔是固定的抽格秒數），回傳這些影格對「同一個查詢」的相似度分數。
+   不會呼叫視覺模型、只是用已經算好的 embedding 比對分數，所以很快。
+   用途：判斷一個事件的時間範圍（分數在前後哪裡開始升高/降低）、確認附近有沒有分數更高的畫面、
+   或是單一命中點的分數是不是噪音（前後分數都很低，可能是誤判）。
 
 工作原則：
-- search_video 的分數只能拿來「篩選候選」，如果使用者的問題需要確認「畫面裡到底發生了什麼」
-  （動作、事件、有沒有某個東西），一定要接著呼叫 explain_clips 實際看過畫面再回答，
-  不要只憑相似度分數就下結論或編造畫面內容。
-- 如果只是要列出「大概在哪裡/哪些片段」而不需要確認細節，search_video 的結果就夠了。
-- 找不到相關內容時要老實說找不到，不要編造。
-- 最後一律用繁體中文，整理成一段對使用者有幫助、清楚的回覆：找到了什麼、
-  在哪支影片的哪個時間點，如果經過 explain_clips 就以視覺解讀為準。
+- search_video / look_around 給的都只是「視覺特徵相似度分數」，不是確認過的事實 ——
+  分數高不代表答案一定對，回答時用「畫面特徵符合」「相似度高」這類措辭，不要講得像親眼確認過。
+- 可以先 search_video 找候選，覺得某個候選有可能但還想確認時間範圍/前後脈絡，再對它 look_around。
+- 找不到相關內容、或分數普遍偏低時要老實說找不到/不確定，不要編造畫面內容。
+- 最後一律用繁體中文，整理成一段對使用者有幫助、清楚的回覆：找到了什麼（用詞保守）、
+  在哪支影片的哪個時間點、相似度大概如何。
 - 如果使用者的問題跟影片內容搜尋無關（例如閒聊、問你是誰），直接以一般助理身份回答即可，不用勉強呼叫工具。
 """
 
@@ -45,7 +48,7 @@ SEARCH_TOOL = {
     "type": "function",
     "function": {
         "name": "search_video",
-        "description": "用語意向量搜尋影片畫面，回傳最相關的候選片段（不代表已確認內容，只是視覺特徵相近的分數）。",
+        "description": "用語意向量搜尋影片畫面，回傳最相關的候選片段（影片、時間碼、相似度分數）。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -57,25 +60,25 @@ SEARCH_TOOL = {
     },
 }
 
-EXPLAIN_TOOL = {
+LOOK_AROUND_TOOL = {
     "type": "function",
     "function": {
-        "name": "explain_clips",
-        "description": "針對最近一次 search_video 找到的候選影格，呼叫視覺模型(Cosmos Reason)實際看畫面內容，"
-                       "過濾不相關的並產生詳細描述與總結。比 search_video 慢很多，只有需要確認畫面實際內容時才呼叫。",
+        "name": "look_around",
+        "description": "針對最近一次 search_video 結果裡的某一筆，往前/往後多看幾張影格的相似度分數"
+                       "（不呼叫視覺模型，只是比對既有 embedding，速度快），用來判斷事件時間範圍或確認命中是否可靠。",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "要確認/解讀的問題或內容"},
-                "indices": {"type": "array", "items": {"type": "integer"},
-                            "description": "要解讀的候選編號（對應最近一次 search_video 結果的 #編號，從 1 開始）；不填則用全部候選"},
+                "index": {"type": "integer", "description": "最近一次 search_video 結果的 #編號，從 1 開始"},
+                "before": {"type": "integer", "description": "往前看幾張，預設 5"},
+                "after": {"type": "integer", "description": "往後看幾張，預設 5"},
             },
-            "required": ["query"],
+            "required": ["index"],
         },
     },
 }
 
-TOOLS = [SEARCH_TOOL, EXPLAIN_TOOL]
+TOOLS = [SEARCH_TOOL, LOOK_AROUND_TOOL]
 
 
 class AgentError(RuntimeError):
@@ -111,8 +114,8 @@ def _call_openrouter(messages: list[dict], max_tokens: int = 1500) -> dict:
         raise AgentError(f"OpenRouter API 錯誤 {e.code}：{body[:500]}")
 
 
-def _run_search(store, embedder, base: str, query: str, top_n: int = 10) -> tuple[list[dict], list[dict]]:
-    """回傳 (完整候選 list，含 path/t_sec，供 explain_clips 用, 給 LLM 看的精簡版)。"""
+def _run_search(store, embedder, base: str, query: str, top_n: int = 10) -> tuple[list[dict], list[dict], list[float]]:
+    """回傳 (完整候選 list，含 path/t_sec，供 look_around 用, 給 LLM 看的精簡版, 這次查詢用的 embedding)。"""
     from app import _cluster_hits  # 沿用 app.py 既有的「相鄰影格合併」邏輯，避免重複實作
 
     q_emb = embedder.embed_text(query)
@@ -120,32 +123,62 @@ def _run_search(store, embedder, base: str, query: str, top_n: int = 10) -> tupl
     hits = store.query(q_emb, pool)
     clustered = _cluster_hits(hits, config.MERGE_FRAME_GAP, base)
     cands = clustered[: max(1, int(top_n or 10))]
+    # thumb/mp4 只給網頁 UI 呈現用，不算進 LLM 看到的 JSON（省 token，見 run_agent_turn 組 tool 訊息時濾掉）
     brief = [{"#": i + 1, "video": c["video"], "timecode": c["timecode"], "score": c["score"],
-              "span": c["span"], "merged": c["merged"]} for i, c in enumerate(cands)]
-    return cands, brief
+              "span": c["span"], "merged": c["merged"], "thumb": c["thumb"], "mp4": c["mp4"]}
+             for i, c in enumerate(cands)]
+    return cands, brief, q_emb
 
 
-def _run_explain(get_vlm_fn, query: str, candidates: list[dict], indices: list[int] | None) -> dict:
-    vlm = get_vlm_fn()
-    if indices:
-        idxset = {int(i) - 1 for i in indices}
-        picked = [c for i, c in enumerate(candidates) if i in idxset and 0 <= i < len(candidates)]
-    else:
-        picked = list(candidates)
-    if not picked:
-        return {"answer": "指定的編號超出範圍，沒有可解讀的候選。", "kept": []}
-    # explain() 會就地在 candidate dict 上加 hires/caption 欄位，複製一份避免污染呼叫端的原始資料
-    picked = [dict(c) for c in picked]
-    result = vlm.explain(query, picked)
-    kept = [{"video": c["video"], "timecode": c["timecode"], "caption": c.get("caption", "")}
-            for c in result["kept"]]
-    return {"answer": result["answer"], "kept": kept}
+def _cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b))
 
 
-def run_agent_turn(session: dict, user_message: str, *, store, embedder, get_vlm_fn, base: str) -> dict:
+def _run_look_around(store, base: str, cands: list[dict], q_emb: list[float],
+                      index: int, before: int = 5, after: int = 5) -> dict:
+    if not cands or q_emb is None:
+        return {"error": "還沒有 search_video 的結果可以往前後看，請先呼叫 search_video。"}
+    i = int(index) - 1
+    if i < 0 or i >= len(cands):
+        return {"error": f"index 超出範圍，最近一次 search_video 只有 {len(cands)} 筆結果。"}
+    cand = cands[i]
+    video, t_sec = cand["video"], cand["t_sec"]
+    center_idx = round(t_sec / config.FRAME_INTERVAL_SEC)
+    before, after = int(before or 5), int(after or 5)
+    offsets = list(range(-before, after + 1))
+    id_by_offset = {}
+    for off in offsets:
+        n = center_idx + off
+        if n < 0:
+            continue
+        t = round(n * config.FRAME_INTERVAL_SEC, 2)
+        id_by_offset[off] = f"{video}::{t}"
+    found = store.get_by_ids(list(id_by_offset.values()))
+    frames = []
+    for off, id_ in id_by_offset.items():
+        rec = found.get(id_)
+        if not rec:
+            continue
+        m = rec["meta"]
+        frames.append({
+            "offset": off, "timecode": m["timecode"], "score": round(_cosine(q_emb, rec["embedding"]), 3),
+            "is_center": off == 0, "thumb": _frame_url(m["path"], base),
+        })
+    frames.sort(key=lambda f: f["offset"])
+    return {"video": video, "center_timecode": cand["timecode"], "frames": frames}
+
+
+def _frame_url(path: str, base: str) -> str:
+    from app import frame_url
+    return frame_url(path, base)
+
+
+def run_agent_turn(session: dict, user_message: str, *, store, embedder, base: str) -> dict:
     """在既有 agent session 上跑一輪對話（含工具呼叫迴圈）。
 
-    session 結構：{"messages": [...OpenRouter 對話格式...], "last_cands": [...最近一次 search_video 的完整候選...]}
+    session 結構：{"messages": [...OpenRouter 對話格式...],
+                   "last_cands": [...最近一次 search_video 的完整候選...],
+                   "last_q_emb": [...最近一次 search_video 用的查詢向量...]}
     回傳 {"answer", "trace": [{"tool","args","result_brief"}], "usage": {...累計}}
     """
     messages = session.setdefault("messages", [])
@@ -185,25 +218,20 @@ def run_agent_turn(session: dict, user_message: str, *, store, embedder, get_vlm
             if fn == "search_video":
                 query = args.get("query", "")
                 top_n = args.get("top_n", 10)
-                cands, brief = _run_search(store, embedder, base, query, top_n)
+                cands, brief, q_emb = _run_search(store, embedder, base, query, top_n)
                 session["last_cands"] = cands
-                result_text = json.dumps({"results": brief}, ensure_ascii=False)
+                session["last_q_emb"] = q_emb
+                # LLM 是文字模型，thumb/mp4 URL 對它沒用、只會浪費 token；那兩欄只留給網頁 UI 顯示。
+                llm_view = [{k: v for k, v in item.items() if k not in ("thumb", "mp4")} for item in brief]
+                result_text = json.dumps({"results": llm_view}, ensure_ascii=False)
                 trace.append({"tool": fn, "args": args, "result_brief": brief})
-            elif fn == "explain_clips":
-                cands = session.get("last_cands") or []
-                if not cands:
-                    result_text = json.dumps({"error": "還沒有 search_video 的結果可以解讀，請先呼叫 search_video。"},
-                                              ensure_ascii=False)
-                    trace.append({"tool": fn, "args": args, "result_brief": {"error": "no prior search"}})
-                else:
-                    try:
-                        out = _run_explain(get_vlm_fn, args.get("query", user_message),
-                                            cands, args.get("indices"))
-                        result_text = json.dumps(out, ensure_ascii=False)
-                        trace.append({"tool": fn, "args": args, "result_brief": out})
-                    except Exception as e:
-                        result_text = json.dumps({"error": f"Cosmos 服務錯誤：{e}"}, ensure_ascii=False)
-                        trace.append({"tool": fn, "args": args, "result_brief": {"error": str(e)}})
+            elif fn == "look_around":
+                out = _run_look_around(store, base, session.get("last_cands"), session.get("last_q_emb"),
+                                        args.get("index"), args.get("before", 5), args.get("after", 5))
+                llm_frames = [{k: v for k, v in f.items() if k != "thumb"} for f in out.get("frames", [])]
+                llm_out = {**out, "frames": llm_frames} if "frames" in out else out
+                result_text = json.dumps(llm_out, ensure_ascii=False)
+                trace.append({"tool": fn, "args": args, "result_brief": out})
             else:
                 result_text = json.dumps({"error": f"未知工具：{fn}"}, ensure_ascii=False)
                 trace.append({"tool": fn, "args": args, "result_brief": {"error": "unknown tool"}})

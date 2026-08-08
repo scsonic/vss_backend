@@ -227,7 +227,7 @@ def api_agent_chat(req: AgentChatReq, request: Request):
     try:
         result = agent_search.run_agent_turn(
             session, req.message,
-            store=get_store(), embedder=get_embedder(), get_vlm_fn=get_vlm, base=base,
+            store=get_store(), embedder=get_embedder(), base=base,
         )
     except agent_search.AgentError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
@@ -531,11 +531,18 @@ h1{font-size:18px;margin:0 0 4px} .sub{color:#8a93a3;font-size:13px;margin:0 0 1
 .me{align-self:flex-end;background:#2b6cff}
 .bot{align-self:flex-start;background:#232733;border:1px solid #313747}
 .muted{color:#8a93a3;font-size:12.5px;align-self:flex-start}
-.trace{align-self:flex-start;max-width:88%;background:#161922;border:1px solid #262b36;border-radius:10px;
+.trace{align-self:flex-start;max-width:92%;background:#161922;border:1px solid #262b36;border-radius:10px;
   padding:8px 10px;font-size:12.5px;color:#a9b2c3}
-.trace .t-item{padding:3px 0;border-top:1px dashed #262b36}
+.trace .t-item{padding:6px 0;border-top:1px dashed #262b36}
 .trace .t-item:first-child{border-top:0}
 .trace code{color:#e0a34a}
+.trace .t-head{margin-bottom:5px}
+.tstrip{display:flex;gap:6px;overflow-x:auto;padding:2px 0}
+.tstrip a.tf{flex:0 0 auto;text-align:center;font-size:10px;color:#8a93a3;text-decoration:none;width:64px}
+.tstrip .tf img{width:64px;height:42px;object-fit:cover;border-radius:6px;display:block;border:1px solid #262b36;background:#000}
+.tstrip .tf.center img{border-color:#2b6cff}
+.tstrip .tf .sc{color:#7fe08a;font-weight:600}
+.tstrip .tf .off{color:#6cf}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #555;border-top-color:#6cf;border-radius:50%;
   animation:s 1s linear infinite;vertical-align:-2px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -547,7 +554,8 @@ button:disabled{opacity:.5;cursor:default}
 <nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
 <div class="wrap">
 <h1>🤖 Agent Search</h1>
-<p class="sub">直接跟 Agent 聊，它會自己判斷要不要搜尋影片、搜什麼、要不要進一步用視覺模型確認畫面。</p>
+<p class="sub">萬用影片搜尋 agent：直接跟它聊，它會自己判斷要不要搜尋、搜什麼、要不要往前後多看幾張影格
+（全部用 embedding 相似度，不呼叫視覺模型，所以較快、但答案只反映「畫面特徵相似度」）。</p>
 <div id="chat" class="chat"></div>
 <div class="row">
   <input id="msg" type="text" placeholder="例如：有沒有人在亂丟垃圾？" onkeydown="if(event.key==='Enter')send()">
@@ -569,12 +577,22 @@ function addTrace(trace){
   const d=document.getElementById('chat');const el=document.createElement('div');el.className='trace';
   el.innerHTML=trace.map(t=>{
     if(t.tool==='search_video'){
-      const n=(t.result_brief&&t.result_brief.length)||0;
-      return '<div class="t-item">🔍 <code>search_video</code>("'+esc(t.args.query||'')+'") → 找到 '+n+' 筆</div>';
+      const items=t.result_brief||[];
+      const strip=items.map(r=>'<a class="tf" href="'+r.mp4+'" target="_blank" title="'+esc(r.video)+' '+r.timecode+'">'
+        +'<img loading="lazy" src="'+r.thumb+'">#'+r['#']+' <span class="sc">'+r.score+'</span></a>').join('');
+      return '<div class="t-item"><div class="t-head">🔍 <code>search_video</code>("'+esc(t.args.query||'')
+        +'") → 找到 '+items.length+' 筆</div><div class="tstrip">'+strip+'</div></div>';
     }
-    if(t.tool==='explain_clips'){
-      const n=(t.result_brief&&t.result_brief.kept&&t.result_brief.kept.length)||0;
-      return '<div class="t-item">👁️ <code>explain_clips</code>("'+esc(t.args.query||'')+'") → 確認 '+n+' 筆相關</div>';
+    if(t.tool==='look_around'){
+      const rb=t.result_brief||{};
+      if(rb.error) return '<div class="t-item">◀▶ <code>look_around</code>(#'+esc(t.args.index)+') → ⚠️ '+esc(rb.error)+'</div>';
+      const frames=rb.frames||[];
+      const strip=frames.map(f=>'<span class="tf'+(f.is_center?' center':'')+'" title="'+esc(rb.video)+' '+f.timecode+'">'
+        +'<img loading="lazy" src="'+f.thumb+'"><span class="off">'+(f.offset>0?'+':'')+f.offset+'</span> '
+        +'<span class="sc">'+f.score+'</span></span>').join('');
+      return '<div class="t-item"><div class="t-head">◀▶ <code>look_around</code>(#'+esc(t.args.index)+'，前'
+        +(t.args.before!=null?t.args.before:5)+'後'+(t.args.after!=null?t.args.after:5)
+        +'） '+esc(rb.video||'')+' '+esc(rb.center_timecode||'')+'</div><div class="tstrip">'+strip+'</div></div>';
     }
     return '<div class="t-item">⚙️ <code>'+esc(t.tool)+'</code></div>';
   }).join('');
@@ -583,7 +601,7 @@ function addTrace(trace){
 async function send(){
   const inp=document.getElementById('msg');const m=inp.value.trim();if(!m)return;
   inp.value='';addMsg('me',m);
-  const wait=addMsg('bot','思考中…（可能會呼叫搜尋/視覺解讀，較久的問題需數十秒）');
+  const wait=addMsg('bot','思考中…（可能會呼叫搜尋/往前後多看幾張）');
   document.getElementById('sendbtn').disabled=true;
   try{
     const r=await fetch('/api/agent_chat',{method:'POST',headers:{'Content-Type':'application/json'},
