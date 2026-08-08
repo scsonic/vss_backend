@@ -22,10 +22,11 @@ SYSTEM_PROMPT = """你是一個「萬用影片搜尋助理」，背後是一個�
 
 1) search_video(query, top_n)
    用語意向量搜尋畫面，回傳最相關的候選片段（影片檔名、時間碼、相似度分數、合併張數）。
-   query 請用「畫面看起來像什麼」來下，用簡短的名詞/場景描述（中英文皆可），
-   不要照抄使用者的完整問句。例如使用者問「有沒有人闖紅燈」，你可以下
-   "person crossing street against red light"、"紅綠燈路口 行人" 等，
-   必要時可以連續呼叫多次、用不同角度/關鍵字去找，增加找到的機會。
+   query 請用「畫面看起來像什麼」來下，用簡短的名詞/場景描述，
+   不要照抄使用者的完整問句。這裡用的 CLIP 模型是英文語料訓練的，中文查詢的效果明顯較差，
+   所以 query 請儘量用英文下（就算使用者是用中文問你），例如使用者問「有沒有人闖紅燈」，
+   你應該下 "person crossing street against red light" 之類的英文描述，而不是中文。
+   必要時可以連續呼叫多次、用不同角度/關鍵字(仍然用英文)去找，增加找到的機會。
 
 2) look_around(index, before, after)
    針對「最近一次 search_video」結果裡的某一筆（index 是結果的 #編號，從 1 開始），
@@ -52,7 +53,8 @@ SEARCH_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "要搜尋的畫面內容，簡短場景/物件描述，中英文皆可"},
+                "query": {"type": "string", "description": "要搜尋的畫面內容，簡短場景/物件描述，"
+                                                             "請用英文（CLIP 模型是英文語料訓練，英文查詢效果明顯較好）"},
                 "top_n": {"type": "integer", "description": "回傳幾筆結果，預設 10"},
             },
             "required": ["query"],
