@@ -511,6 +511,22 @@ async function load(){
     +'usage: {prompt_tokens, completion_tokens, total_tokens, tokens_per_sec}}</code>'
     +'　— <code>answer</code> 是繁中總結；<code>usage</code> 是這次呼叫 Cosmos 用掉的 token 數與生成速度。'
     +'此步驟需要 VLM 服務（serve_vlm.sh）已啟動，可能需數十秒到數分鐘。</p>'
+    +'<h4>3) POST /api/agent_chat — 跟萬用影片搜尋 agent 聊天</h4>'
+    +'<p class="k" style="width:auto">單一支 API 就是完整聊天介面：把使用者訊息丟進去，agent（OpenRouter '
+    +'deepseek/deepseek-v4-flash-0731）會自己判斷要不要呼叫 <code>search_video</code>（embedding 語意搜尋）'
+    +'及 <code>look_around</code>（往前後多看幾張影格的相似度），呼叫完再統整成繁中回覆。'
+    +'全程只用 CLIP embedding 相似度，不呼叫視覺模型（VLM），速度快但答案只反映畫面特徵相似度、不是真的「看懂」畫面。</p>'
+    +'<pre>curl -X POST '+origin+'/api/agent_chat \\\n'
+    +'  -H "Content-Type: application/json" \\\n'
+    +'  -d \\'{"session_id": null, "message": "有沒有人在亂丟垃圾？"}\\'</pre>'
+    +'<p class="k" style="width:auto"><code>session_id</code>：第一次呼叫傳 <code>null</code>，回應會帶一個新的'
+    +' <code>session_id</code>；同一段對話（含上次搜尋結果，讓 <code>look_around</code> 能接續）之後的訊息都要帶著同一個'
+    +' <code>session_id</code> 繼續呼叫。</p>'
+    +'<p class="k" style="width:auto">回應：<code>{session_id, answer, trace: [{tool, args, result_brief}], '
+    +'usage: {prompt_tokens, completion_tokens, total_tokens}}</code>'
+    +'　— <code>answer</code> 是 agent 的繁中回覆；<code>trace</code> 是這輪呼叫過的工具紀錄'
+    +'（<code>search_video</code> 的 <code>result_brief</code> 是候選片段列表 <code>{#, video, timecode, score, span, merged, thumb, mp4}</code>，'
+    +'<code>look_around</code> 的 <code>result_brief</code> 是 <code>{video, center_timecode, frames: [{offset, timecode, score, thumb, is_center}]}</code>）。</p>'
     +'</div>';
 }
 load();
