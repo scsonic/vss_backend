@@ -13,7 +13,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 import agent_search
 import config
+import transcribe
 from embedder import ClipEmbedder
 from store import VectorStore
 
@@ -242,6 +243,20 @@ def api_agent_chat(req: AgentChatReq, request: Request):
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"session_id": sid, "answer": result["answer"],
             "trace": result["trace"], "usage": result["usage"]}
+
+
+@app.post("/api/transcribe")
+async def api_transcribe(file: UploadFile = File(...), format: str | None = Form(None)):
+    """語音轉文字，純轉發到 OpenRouter 的 Whisper Large V3 Turbo；API key 留在伺服器端，呼叫端不需要帶。"""
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        return JSONResponse({"error": "空的音訊檔"}, status_code=400)
+    fmt = (format or Path(file.filename or "").suffix.lstrip(".") or "wav").lower()
+    try:
+        result = transcribe.transcribe(audio_bytes, fmt)
+    except transcribe.TranscribeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"text": result.get("text", ""), "raw": result}
 
 
 @app.get("/api/dbinfo")
@@ -552,6 +567,17 @@ async function load(){
     +'　— <code>answer</code> 是 agent 的繁中回覆；<code>trace</code> 是這輪呼叫過的工具紀錄'
     +'（<code>search_video</code> 的 <code>result_brief</code> 是候選片段列表 <code>{#, video, timecode, score, span, merged, thumb, mp4}</code>，'
     +'<code>look_around</code> 的 <code>result_brief</code> 是 <code>{video, center_timecode, frames: [{offset, timecode, score, thumb, is_center}]}</code>）。</p>'
+    +'<h4>4) POST /api/transcribe — 語音轉文字（Whisper Large V3 Turbo）</h4>'
+    +'<p class="k" style="width:auto">上傳一段音訊，回傳逐字稿。這支 API 純粹是轉發到 OpenRouter 的 '
+    +'<code>openai/whisper-large-v3-turbo</code>，OpenRouter 的 API key 放在伺服器端，呼叫這支 API 不需要、'
+    +'也看不到那把 key。</p>'
+    +'<pre>curl -X POST '+origin+'/api/transcribe \\\n'
+    +'  -F "file=@audio.wav"</pre>'
+    +'<p class="k" style="width:auto">用 <code>multipart/form-data</code> 上傳檔案（欄位名 <code>file</code>），'
+    +'格式（wav/mp3/m4a…）預設從副檔名判斷，也可以另外帶一個 <code>format</code> 欄位明確指定'
+    +'（例如 <code>-F "format=mp3"</code>）。</p>'
+    +'<p class="k" style="width:auto">回應：<code>{text, raw}</code>'
+    +'　— <code>text</code> 是逐字稿；<code>raw</code> 是 OpenRouter 回傳的完整原始結果，供除錯/取額外欄位用。</p>'
     +'</div>';
 }
 load();

@@ -74,3 +74,7 @@ except ImportError:
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731"
 AGENT_MAX_TOOL_HOPS = 6      # search_video/explain_clips 最多連續呼叫幾輪，避免無限迴圈
+
+# --- 語音轉文字（/api/transcribe，單純轉發到 OpenRouter 的 Whisper，key 藏在後端）---
+OPENROUTER_TRANSCRIBE_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
+OPENROUTER_TRANSCRIBE_MODEL = "openai/whisper-large-v3-turbo"
