@@ -40,8 +40,10 @@ done
 echo "=== ALL SIGLIP2 BACKFILL DONE ===" | tee -a "$LOG"
 
 # backfill 跑完了，把 GPU 讓出來的 Cosmos VLM(llama-server) 重新啟動。
+# -c 16384：跟這台機器上另一個不相干的 process 共用 GPU 時，32768 context 的 kv cache 會 OOM，
+# 之前手動啟動時就是用這個縮小過的 context，這裡沿用同樣的設定。
 echo "=== restarting VLM (llama-server) ===" | tee -a "$LOG"
 cd /home/toyota-004/Desktop/vss_test
-nohup bash serve_vlm.sh > vlm.log 2>&1 &
+nohup bash serve_vlm.sh -c 16384 > vlm.log 2>&1 &
 disown
 echo "=== VLM restart requested ===" | tee -a "$LOG"
