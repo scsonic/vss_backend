@@ -134,7 +134,8 @@ class Vlm:
     # ---------- 步驟 ----------
     def caption(self, image_path: str, max_tokens: int = 200) -> str:
         msg = [{"role": "user", "content": [
-            {"type": "text", "text": "用一句話詳細描述這張影片影格，包含畫面中的看板/招牌文字、車輛、人物與明顯動作。"},
+            {"type": "text", "text": "用一句話詳細描述這張影片影格，包含畫面中的看板/招牌文字、車輛、人物與明顯動作。"
+                                      "請用英文回答（Answer in English）。"},
             self._img_content(image_path),
         ]}]
         return _strip_think(self._chat(msg, max_tokens=max_tokens)["message"].get("content"))
@@ -241,7 +242,8 @@ class Vlm:
             "你是影片分析助理。以下是與使用者問題相關的影格（含影片名、時間碼、描述）。"
             "如果要確認某個『動作或事件』的前因後果（例如是否真的在丟垃圾、是否闖紅燈），"
             "可以呼叫 look_around 取得該時間點的前後影格再判斷。"
-            "最後請用繁體中文寫『一段』通順的總結：發生了什麼、在哪支影片的哪些時間點、與問題的關聯。"
+            "最後請用「英文」（即使使用者是用中文或其他語言提問也一樣）寫『一段』通順的總結："
+            "發生了什麼、在哪支影片的哪些時間點、與問題的關聯。"
         )
         content = [{"type": "text", "text": f"使用者問題：「{query}」\n相關影格：\n{caps}"}]
         for c in kept[:4]:
