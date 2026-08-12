@@ -544,10 +544,28 @@ nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px
 .k{color:#8a93a3;display:inline-block;width:120px} b{color:#fff}
 pre{background:#0d0f14;border:1px solid #262b36;border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.6}
 code{color:#e0a34a} h3{margin-bottom:10px} .api h4{margin:16px 0 6px}
+.demo-row{display:flex;gap:8px;margin-top:10px}
+.demo-row input{flex:1;padding:8px 10px;border-radius:6px;border:1px solid #262b36;background:#0d0f14;color:#e6e6e6;font-size:14px}
+.demo-row button{padding:8px 18px;border-radius:6px;border:1px solid #2b6cff;background:#2b6cff;color:#fff;cursor:pointer;font-size:14px}
+.demo-row button:disabled{opacity:0.5;cursor:default}
+#ttsStatus{margin-top:10px;color:#8a93a3;font-size:13px}
+#ttsResult .panel{margin-top:10px}
 </style></head><body>
 <nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a><a href="/how-to-use-api">API 用法</a></nav>
 <div class="wrap">
 <h1>API 用法</h1>
+<div class="panel">
+<h3>試試看：文字 → 語音 → Whisper 辨識（demo）</h3>
+<p class="k" style="width:auto">輸入一段文字送出：瀏覽器會用內建語音朗讀（Web Speech API），同時用麥克風把這段聲音錄成 wav，
+再呼叫 <code>/api/transcribe</code>（Whisper）辨識回文字，可以用來測試辨識準不準。
+需要允許麥克風權限，而且喇叭聲音要能被麥克風收到（別靜音、別戴完全隔音的耳機）。</p>
+<div class="demo-row">
+<input id="ttsText" type="text" placeholder="輸入一段文字…">
+<button id="ttsBtn">送出</button>
+</div>
+<div id="ttsStatus"></div>
+<div id="ttsResult"></div>
+</div>
 <div id="api" class="panel api"></div>
 </div>
 <script>
@@ -611,6 +629,86 @@ async function load(){
     +'</div>';
 }
 load();
+
+// ---- demo: 文字 → 語音朗讀（Web Speech API）→ 麥克風錄成 wav → /api/transcribe ----
+function _wavBlobFromAudioBuffer(buf){
+  const numCh=buf.numberOfChannels, sr=buf.sampleRate, samples=buf.length;
+  const bytesPerSample=2, blockAlign=numCh*bytesPerSample;
+  const dataSize=samples*blockAlign;
+  const ab=new ArrayBuffer(44+dataSize);
+  const v=new DataView(ab);
+  function ws(o,s){for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))}
+  ws(0,'RIFF'); v.setUint32(4,36+dataSize,true); ws(8,'WAVE');
+  ws(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,numCh,true); v.setUint32(24,sr,true);
+  v.setUint32(28,sr*blockAlign,true); v.setUint16(32,blockAlign,true); v.setUint16(34,16,true);
+  ws(36,'data'); v.setUint32(40,dataSize,true);
+  const chans=[]; for(let c=0;c<numCh;c++)chans.push(buf.getChannelData(c));
+  let off=44;
+  for(let i=0;i<samples;i++){
+    for(let c=0;c<numCh;c++){
+      const s=Math.max(-1,Math.min(1,chans[c][i]));
+      v.setInt16(off, s<0?s*0x8000:s*0x7fff, true);
+      off+=2;
+    }
+  }
+  return new Blob([ab], {type:'audio/wav'});
+}
+
+let _ttsBusy=false;
+document.getElementById('ttsBtn').onclick=async()=>{
+  if(_ttsBusy)return;
+  const text=document.getElementById('ttsText').value.trim();
+  if(!text)return;
+  const statusEl=document.getElementById('ttsStatus');
+  const resultEl=document.getElementById('ttsResult');
+  resultEl.innerHTML='';
+  if(!('speechSynthesis' in window)){statusEl.textContent='⚠️ 這個瀏覽器不支援 Web Speech API（語音朗讀）';return}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){statusEl.textContent='⚠️ 這個瀏覽器不支援錄音（getUserMedia）';return}
+  _ttsBusy=true;
+  document.getElementById('ttsBtn').disabled=true;
+  let stream=null;
+  try{
+    statusEl.textContent='🎙️ 要求麥克風權限…';
+    stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const chunks=[];
+    const rec=new MediaRecorder(stream);
+    rec.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data)};
+    const stopped=new Promise(res=>{rec.onstop=res});
+    rec.start();
+    statusEl.textContent='🔊 朗讀中，同時錄音…';
+    const utter=new SpeechSynthesisUtterance(text);
+    await new Promise(res=>{
+      utter.onend=res; utter.onerror=res;
+      speechSynthesis.speak(utter);
+      setTimeout(res, 15000);   // 保險：語音一直沒觸發 onend 時的上限
+    });
+    await new Promise(r=>setTimeout(r,300));  // 留一點尾音緩衝
+    rec.stop();
+    stream.getTracks().forEach(t=>t.stop()); stream=null;
+    await stopped;
+    statusEl.textContent='🛠️ 轉成 wav…';
+    const recBlob=new Blob(chunks, {type: chunks[0]?chunks[0].type:'audio/webm'});
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const audioBuf=await ctx.decodeAudioData(await recBlob.arrayBuffer());
+    const wavBlob=_wavBlobFromAudioBuffer(audioBuf);
+    statusEl.textContent='📤 送到 /api/transcribe 辨識中…';
+    const fd=new FormData();
+    fd.append('file', wavBlob, 'speech.wav');
+    const r=await fetch('/api/transcribe', {method:'POST', body:fd});
+    const d=await r.json();
+    if(d.error){statusEl.textContent='⚠️ '+d.error;return}
+    statusEl.textContent='✅ 完成';
+    resultEl.innerHTML='<div class="panel"><div><span class="k">你輸入</span>'+esc(text)+'</div>'
+      +'<div><span class="k">Whisper 聽到</span><b>'+esc(d.text||'（空）')+'</b></div></div>';
+  }catch(err){
+    statusEl.textContent='⚠️ '+(err&&err.message?err.message:String(err));
+  }finally{
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    _ttsBusy=false;
+    document.getElementById('ttsBtn').disabled=false;
+  }
+};
 </script></body></html>"""
 
 
