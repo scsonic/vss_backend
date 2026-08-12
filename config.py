@@ -40,7 +40,7 @@ EMBED_MODELS = {
         "collection": "video_frames_siglip2_giant",
     },
 }
-DEFAULT_EMBED_MODEL = "dfn5b"
+DEFAULT_EMBED_MODEL = "siglip2-giant"
 
 # --- VLM ---
 # NVIDIA Cosmos-Reason2-8B（reasoning VLM，Qwen3-VL 底）GGUF Q4_K_M，

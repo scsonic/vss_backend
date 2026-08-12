@@ -28,9 +28,9 @@ SYSTEM_PROMPT = """你是一個「萬用影片搜尋助理」，背後是影片�
    你應該下 "person crossing street against red light" 之類的英文描述，而不是中文。
    必要時可以連續呼叫多次、用不同角度/關鍵字(仍然用英文)去找，增加找到的機會。
    model 是要用哪組 embedding 模型查，兩組是完全獨立的資料庫：
-     - "dfn5b"（預設，不指定就是用這個）
-     - "siglip2-giant"
-   不用主動切換，維持預設就好；只有使用者明確要求「用 SigLIP2」之類的指定模型時才改用另一個。
+     - "siglip2-giant"（預設，不指定就是用這個）
+     - "dfn5b"
+   不用主動切換，維持預設就好；只有使用者明確要求指定模型時才改用另一個。
    如果同一件事在其中一個模型都找不到，也可以換另一個模型再試一次。
 
 2) look_around(index, before, after)
@@ -62,7 +62,7 @@ SEARCH_TOOL = {
                                                              "請用英文（CLIP 模型是英文語料訓練，英文查詢效果明顯較好）"},
                 "top_n": {"type": "integer", "description": "回傳幾筆結果，預設 10"},
                 "model": {"type": "string", "enum": list(config.EMBED_MODELS.keys()),
-                          "description": "要用哪組 embedding 模型查，預設 dfn5b，兩組是各自獨立的資料庫"},
+                          "description": "要用哪組 embedding 模型查，預設 siglip2-giant，兩組是各自獨立的資料庫"},
             },
             "required": ["query"],
         },
