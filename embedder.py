@@ -21,14 +21,16 @@ def _pick_device() -> str:
 
 
 class ClipEmbedder:
-    def __init__(self, device: str = None):
+    def __init__(self, device: str = None, clip_model: str = None, clip_pretrained: str = None):
         self.device = device or _pick_device()
-        print(f"[embedder] loading {config.CLIP_MODEL} ({config.CLIP_PRETRAINED}) on {self.device} ...")
+        self.clip_model = clip_model or config.CLIP_MODEL
+        clip_pretrained = clip_pretrained or config.CLIP_PRETRAINED
+        print(f"[embedder] loading {self.clip_model} ({clip_pretrained}) on {self.device} ...")
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            config.CLIP_MODEL, pretrained=config.CLIP_PRETRAINED
+            self.clip_model, pretrained=clip_pretrained
         )
         self.model = self.model.to(self.device).eval()
-        self.tokenizer = open_clip.get_tokenizer(config.CLIP_MODEL)
+        self.tokenizer = open_clip.get_tokenizer(self.clip_model)
 
     @torch.no_grad()
     def embed_image(self, path: str) -> list[float]:

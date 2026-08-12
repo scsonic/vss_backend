@@ -23,6 +23,25 @@ CLIP_MODEL = "ViT-H-14-378-quickgelu"
 _LOCAL_CLIP = ROOT / "models" / "dfn5b" / "open_clip_pytorch_model.bin"
 CLIP_PRETRAINED = str(_LOCAL_CLIP) if _LOCAL_CLIP.exists() else "dfn5b"
 
+# 可選的多組 embedding 模型：各自存在獨立的 ChromaDB collection（同一個 DB_DIR 底下），
+# 呼叫 /api/search、/api/agent_chat 的 search_video 工具時可用 model 參數指定要查哪一組，
+# 不指定就用 DEFAULT_EMBED_MODEL。兩組資料庫互不相干，dim 也不同（1024 vs 1536），不能混用。
+EMBED_MODELS = {
+    "dfn5b": {
+        "label": "DFN5B-CLIP-ViT-H/14 @ 378px",
+        "clip_model": CLIP_MODEL,
+        "clip_pretrained": CLIP_PRETRAINED,
+        "collection": COLLECTION_NAME,
+    },
+    "siglip2-giant": {
+        "label": "SigLIP2-Giant (ViT-gopt-16 @ 384px)",
+        "clip_model": "ViT-gopt-16-SigLIP2-384",
+        "clip_pretrained": "webli",
+        "collection": "video_frames_siglip2_giant",
+    },
+}
+DEFAULT_EMBED_MODEL = "dfn5b"
+
 # --- VLM ---
 # NVIDIA Cosmos-Reason2-8B（reasoning VLM，Qwen3-VL 底）GGUF Q4_K_M，
 # 由 llama-server(Metal 加速) 提供服務；vlm.py 透過 HTTP API 呼叫。

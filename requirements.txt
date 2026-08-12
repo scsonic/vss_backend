@@ -5,6 +5,10 @@
 open_clip_torch>=2.24.0
 torch>=2.2.0
 Pillow>=10.0.0
+transformers>=4.40.0   # SigLIP2 系列的 tokenizer 需要（open_clip 的 HFTokenizer）
+
+# 下載 YouTube 影片用
+yt-dlp
 
 # 向量資料庫（取代 Milvus）
 chromadb>=0.5.0

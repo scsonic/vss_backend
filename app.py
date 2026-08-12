@@ -39,9 +39,9 @@ app.mount("/frames", StaticFiles(directory=str(config.FRAMES_DIR)), name="frames
 config.VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/videos", StaticFiles(directory=str(config.VIDEO_DIR)), name="videos")
 
-# ---- 延遲載入的單例 ----
-_embedder = None
-_store = None
+# ---- 延遲載入的單例（每組 embedding 模型各自一份，見 config.EMBED_MODELS）----
+_embedders: dict[str, ClipEmbedder] = {}
+_stores: dict[str, VectorStore] = {}
 _vlm = None
 # session_id -> {"cands":[...], "messages":[...], "explained":bool}
 SESSIONS: dict[str, dict] = {}
@@ -49,19 +49,22 @@ SESSIONS: dict[str, dict] = {}
 AGENT_SESSIONS: dict[str, dict] = {}
 
 
-def get_embedder():
-    global _embedder
-    if _embedder is None:
+def get_embedder(model_key: str = None) -> ClipEmbedder:
+    model_key = model_key or config.DEFAULT_EMBED_MODEL
+    if model_key not in _embedders:
+        mcfg = config.EMBED_MODELS[model_key]
         # CPU：查詢只需單張 embedding（夠快），把 GPU 記憶體整個留給 Cosmos VLM。
-        _embedder = ClipEmbedder(device="cpu")
-    return _embedder
+        _embedders[model_key] = ClipEmbedder(device="cpu", clip_model=mcfg["clip_model"],
+                                              clip_pretrained=mcfg["clip_pretrained"])
+    return _embedders[model_key]
 
 
-def get_store():
-    global _store
-    if _store is None:
-        _store = VectorStore()
-    return _store
+def get_store(model_key: str = None) -> VectorStore:
+    model_key = model_key or config.DEFAULT_EMBED_MODEL
+    if model_key not in _stores:
+        mcfg = config.EMBED_MODELS[model_key]
+        _stores[model_key] = VectorStore(collection_name=mcfg["collection"])
+    return _stores[model_key]
 
 
 def get_vlm():
@@ -107,6 +110,7 @@ def video_url(video: str, base: str = "") -> str:
 class SearchReq(BaseModel):
     query: str
     top_n: int = 10
+    model: str = config.DEFAULT_EMBED_MODEL  # 用哪組 embedding 模型查，見 config.EMBED_MODELS
 
 
 def _frame_idx(path: str, t_sec: float) -> int:
@@ -154,10 +158,15 @@ def _cluster_hits(hits: list[dict], gap: int, base: str = "") -> list[dict]:
 
 @app.post("/api/search")
 def api_search(req: SearchReq, request: Request):
-    store = get_store()
+    if req.model not in config.EMBED_MODELS:
+        return JSONResponse(
+            {"error": f"未知的 model：{req.model}，可用值：{list(config.EMBED_MODELS.keys())}"},
+            status_code=400,
+        )
+    store = get_store(req.model)
     if store.count() == 0:
         return JSONResponse({"error": "資料庫是空的"}, status_code=400)
-    q_emb = get_embedder().embed_text(req.query)
+    q_emb = get_embedder(req.model).embed_text(req.query)
     # 多撈一個 pool 再做「相鄰影格合併」，最後回 top_n 筆不同片段
     pool = min(store.count(), max(req.top_n * 8, 60))
     hits = store.query(q_emb, pool)
@@ -165,7 +174,7 @@ def api_search(req: SearchReq, request: Request):
     cands = clustered[:max(1, req.top_n)]
     sid = uuid.uuid4().hex
     SESSIONS[sid] = {"query": req.query, "cands": cands, "messages": [], "explained": False}
-    return {"session_id": sid, "results": cands}
+    return {"session_id": sid, "model": req.model, "results": cands}
 
 
 class SidReq(BaseModel):
@@ -227,7 +236,7 @@ def api_agent_chat(req: AgentChatReq, request: Request):
     try:
         result = agent_search.run_agent_turn(
             session, req.message,
-            store=get_store(), embedder=get_embedder(), base=base,
+            get_store_fn=get_store, get_embedder_fn=get_embedder, base=base,
         )
     except agent_search.AgentError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
@@ -237,7 +246,9 @@ def api_agent_chat(req: AgentChatReq, request: Request):
 
 @app.get("/api/dbinfo")
 def api_dbinfo(request: Request):
-    store = get_store()
+    # 影片清單／封面一律用「預設模型」的 collection 呈現（各模型理論上涵蓋同一批影片，
+    # 不用重複顯示整個 gallery 好幾次；每個模型各自的向量數/維度另外在 embed_models 列出）。
+    store = get_store(config.DEFAULT_EMBED_MODEL)
     r = store.collection.get(include=["metadatas"])
     metas = r["metadatas"]
     from collections import defaultdict
@@ -254,16 +265,23 @@ def api_dbinfo(request: Request):
             "cover": frame_url(ms_sorted[0]["path"], base),
             "mp4": video_url(v, base),
         })
-    dim = len(store.collection.get(limit=1, include=["embeddings"])["embeddings"][0]) if metas else 0
+
+    embed_models = []
+    for key, mcfg in config.EMBED_MODELS.items():
+        st = get_store(key)
+        cnt = st.count()
+        dim = len(st.collection.get(limit=1, include=["embeddings"])["embeddings"][0]) if cnt else 0
+        embed_models.append({
+            "key": key, "label": mcfg["label"], "collection": mcfg["collection"],
+            "total_frames": cnt, "dim": dim, "default": key == config.DEFAULT_EMBED_MODEL,
+        })
+
     return {
         "videos": videos,
         "total_frames": len(metas),
-        "vectordb": {"engine": "ChromaDB", "collection": config.COLLECTION_NAME,
-                     "dim": dim, "metric": "cosine", "index": "HNSW"},
-        "models": {
-            "embedding": "Apple DFN5B-CLIP-ViT-H/14 @ 378px (open_clip, 1024維)",
-            "vlm": "NVIDIA Cosmos-Reason2-8B (GGUF Q4_K_M, llama.cpp)",
-        },
+        "vectordb": {"engine": "ChromaDB", "metric": "cosine", "index": "HNSW"},
+        "embed_models": embed_models,
+        "models": {"vlm": "NVIDIA Cosmos-Reason2-8B (GGUF Q4_K_M, llama.cpp)"},
         "params": {"frame_interval_sec": config.FRAME_INTERVAL_SEC,
                    "vlm_img_max_px": config.VLM_IMG_MAX_PX},
     }
@@ -472,15 +490,17 @@ code{color:#e0a34a} h3{margin-bottom:10px} .api h4{margin:16px 0 6px}
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 async function load(){
   const d=await (await fetch('/api/dbinfo')).json();
+  const modelRows=d.embed_models.map(m=>
+    '<div><span class="k">'+esc(m.key)+(m.default?' (預設)':'')+'</span>'+esc(m.label)
+    +'　<b>'+m.total_frames+'</b> 向量　·　'+m.dim+' 維　·　collection <code>'+esc(m.collection)+'</code></div>'
+  ).join('');
   document.getElementById('sys').innerHTML=
     '<div class="panel"><h3>向量資料庫</h3>'
     +'<div><span class="k">引擎</span><b>'+d.vectordb.engine+'</b></div>'
-    +'<div><span class="k">Collection</span>'+d.vectordb.collection+'</div>'
-    +'<div><span class="k">向量維度</span><b>'+d.vectordb.dim+'</b></div>'
     +'<div><span class="k">距離度量</span>'+d.vectordb.metric+' / '+d.vectordb.index+'</div>'
-    +'<div><span class="k">總向量數</span><b>'+d.total_frames+'</b>（'+d.videos.length+' 支影片）</div></div>'
+    +'<div><span class="k">總向量數</span><b>'+d.total_frames+'</b>（'+d.videos.length+' 支影片，預設模型）</div></div>'
+    +'<div class="panel"><h3>Embedding 模型（可用 model 參數切換）</h3>'+modelRows+'</div>'
     +'<div class="panel"><h3>AI 模型</h3>'
-    +'<div><span class="k">Embedding</span>'+esc(d.models.embedding)+'</div>'
     +'<div><span class="k">VLM</span>'+esc(d.models.vlm)+'</div>'
     +'<div><span class="k">抽格間隔</span>每 '+d.params.frame_interval_sec+' 秒；送 VLM 解析度上限 '+d.params.vlm_img_max_px+'px</div></div>';
   let h='';
@@ -498,8 +518,11 @@ async function load(){
     +'<h4>1) POST /api/search — 語意搜尋影格</h4>'
     +'<pre>curl -X POST '+origin+'/api/search \\\n'
     +'  -H "Content-Type: application/json" \\\n'
-    +'  -d \\'{"query": "有沒有人在亂丟垃圾", "top_n": 10}\\'</pre>'
-    +'<p class="k" style="width:auto">回應：<code>{session_id, results: [{video, timecode, t_sec, score, thumb, mp4, filename, span, merged}]}</code>'
+    +'  -d \\'{"query": "有沒有人在亂丟垃圾", "top_n": 10, "model": "dfn5b"}\\'</pre>'
+    +'<p class="k" style="width:auto"><code>model</code>（可選，預設 <code>dfn5b</code>）：要用哪組 embedding 模型查，'
+    +'目前可用：'+d.embed_models.map(m=>'<code>'+esc(m.key)+'</code>（'+esc(m.label)+'）').join('、')
+    +'。兩組是完全獨立的資料庫，各自的相似度分數不能直接比較。</p>'
+    +'<p class="k" style="width:auto">回應：<code>{session_id, model, results: [{video, timecode, t_sec, score, thumb, mp4, filename, span, merged}]}</code>'
     +'　— <code>session_id</code> 要留著給下一步 /api/explain 用。</p>'
     +'<h4>2) POST /api/explain — 用 Cosmos Reason 解讀剛才的搜尋結果</h4>'
     +'<pre>curl -X POST '+origin+'/api/explain \\\n'
@@ -515,7 +538,9 @@ async function load(){
     +'<p class="k" style="width:auto">單一支 API 就是完整聊天介面：把使用者訊息丟進去，agent（OpenRouter '
     +'deepseek/deepseek-v4-flash-0731）會自己判斷要不要呼叫 <code>search_video</code>（embedding 語意搜尋）'
     +'及 <code>look_around</code>（往前後多看幾張影格的相似度），呼叫完再統整成繁中回覆。'
-    +'全程只用 CLIP embedding 相似度，不呼叫視覺模型（VLM），速度快但答案只反映畫面特徵相似度、不是真的「看懂」畫面。</p>'
+    +'全程只用 CLIP embedding 相似度，不呼叫視覺模型（VLM），速度快但答案只反映畫面特徵相似度、不是真的「看懂」畫面。'
+    +'agent 呼叫 <code>search_video</code> 時可以自己選要查哪組 embedding 模型（預設 <code>dfn5b</code>，'
+    +'使用者明確要求時可改用 <code>siglip2-giant</code>）——不用你手動傳，這是 agent 自己在 tool call 裡帶的參數。</p>'
     +'<pre>curl -X POST '+origin+'/api/agent_chat \\\n'
     +'  -H "Content-Type: application/json" \\\n'
     +'  -d \\'{"session_id": null, "message": "有沒有人在亂丟垃圾？"}\\'</pre>'
@@ -597,7 +622,7 @@ function addTrace(trace){
       const strip=items.map(r=>'<a class="tf" href="'+r.mp4+'" target="_blank" title="'+esc(r.video)+' '+r.timecode+'">'
         +'<img loading="lazy" src="'+r.thumb+'">#'+r['#']+' <span class="sc">'+r.score+'</span></a>').join('');
       return '<div class="t-item"><div class="t-head">🔍 <code>search_video</code>("'+esc(t.args.query||'')
-        +'") → 找到 '+items.length+' 筆</div><div class="tstrip">'+strip+'</div></div>';
+        +'"'+(t.model?'，model='+esc(t.model):'')+') → 找到 '+items.length+' 筆</div><div class="tstrip">'+strip+'</div></div>';
     }
     if(t.tool==='look_around'){
       const rb=t.result_brief||{};

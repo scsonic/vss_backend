@@ -15,18 +15,23 @@ import urllib.error
 
 import config
 
-SYSTEM_PROMPT = """你是一個「萬用影片搜尋助理」，背後是一個影片畫面的向量資料庫（CLIP embedding + ChromaDB）。
+SYSTEM_PROMPT = """你是一個「萬用影片搜尋助理」，背後是影片畫面的向量資料庫（CLIP embedding + ChromaDB）。
 你完全靠「語意向量相似度」運作，沒有視覺模型幫你看畫面內容、也看不到圖片本身 —— 你只看得到分數、時間碼、檔名。
 
 你有兩個工具可以用：
 
-1) search_video(query, top_n)
+1) search_video(query, top_n, model)
    用語意向量搜尋畫面，回傳最相關的候選片段（影片檔名、時間碼、相似度分數、合併張數）。
    query 請用「畫面看起來像什麼」來下，用簡短的名詞/場景描述，
    不要照抄使用者的完整問句。這裡用的 CLIP 模型是英文語料訓練的，中文查詢的效果明顯較差，
    所以 query 請儘量用英文下（就算使用者是用中文問你），例如使用者問「有沒有人闖紅燈」，
    你應該下 "person crossing street against red light" 之類的英文描述，而不是中文。
    必要時可以連續呼叫多次、用不同角度/關鍵字(仍然用英文)去找，增加找到的機會。
+   model 是要用哪組 embedding 模型查，兩組是完全獨立的資料庫：
+     - "dfn5b"（預設，不指定就是用這個）
+     - "siglip2-giant"
+   不用主動切換，維持預設就好；只有使用者明確要求「用 SigLIP2」之類的指定模型時才改用另一個。
+   如果同一件事在其中一個模型都找不到，也可以換另一個模型再試一次。
 
 2) look_around(index, before, after)
    針對「最近一次 search_video」結果裡的某一筆（index 是結果的 #編號，從 1 開始），
@@ -56,6 +61,8 @@ SEARCH_TOOL = {
                 "query": {"type": "string", "description": "要搜尋的畫面內容，簡短場景/物件描述，"
                                                              "請用英文（CLIP 模型是英文語料訓練，英文查詢效果明顯較好）"},
                 "top_n": {"type": "integer", "description": "回傳幾筆結果，預設 10"},
+                "model": {"type": "string", "enum": list(config.EMBED_MODELS.keys()),
+                          "description": "要用哪組 embedding 模型查，預設 dfn5b，兩組是各自獨立的資料庫"},
             },
             "required": ["query"],
         },
@@ -175,12 +182,17 @@ def _frame_url(path: str, base: str) -> str:
     return frame_url(path, base)
 
 
-def run_agent_turn(session: dict, user_message: str, *, store, embedder, base: str) -> dict:
+def run_agent_turn(session: dict, user_message: str, *, get_store_fn, get_embedder_fn, base: str) -> dict:
     """在既有 agent session 上跑一輪對話（含工具呼叫迴圈）。
+
+    get_store_fn / get_embedder_fn：傳 model_key 進去，回傳對應模型的 VectorStore / ClipEmbedder
+    單例（見 app.py 的 get_store/get_embedder）——因為兩組 embedding 模型各自有獨立資料庫，
+    要由每次 search_video 呼叫時帶的 model 參數決定要用哪一組。
 
     session 結構：{"messages": [...OpenRouter 對話格式...],
                    "last_cands": [...最近一次 search_video 的完整候選...],
-                   "last_q_emb": [...最近一次 search_video 用的查詢向量...]}
+                   "last_q_emb": [...最近一次 search_video 用的查詢向量...],
+                   "last_model": "最近一次 search_video 用的 model_key（look_around 要用同一組資料庫）"}
     回傳 {"answer", "trace": [{"tool","args","result_brief"}], "usage": {...累計}}
     """
     messages = session.setdefault("messages", [])
@@ -220,14 +232,22 @@ def run_agent_turn(session: dict, user_message: str, *, store, embedder, base: s
             if fn == "search_video":
                 query = args.get("query", "")
                 top_n = args.get("top_n", 10)
+                model_key = args.get("model") or config.DEFAULT_EMBED_MODEL
+                if model_key not in config.EMBED_MODELS:
+                    model_key = config.DEFAULT_EMBED_MODEL
+                store = get_store_fn(model_key)
+                embedder = get_embedder_fn(model_key)
                 cands, brief, q_emb = _run_search(store, embedder, base, query, top_n)
                 session["last_cands"] = cands
                 session["last_q_emb"] = q_emb
+                session["last_model"] = model_key
                 # LLM 是文字模型，thumb/mp4 URL 對它沒用、只會浪費 token；那兩欄只留給網頁 UI 顯示。
                 llm_view = [{k: v for k, v in item.items() if k not in ("thumb", "mp4")} for item in brief]
-                result_text = json.dumps({"results": llm_view}, ensure_ascii=False)
-                trace.append({"tool": fn, "args": args, "result_brief": brief})
+                result_text = json.dumps({"model": model_key, "results": llm_view}, ensure_ascii=False)
+                trace.append({"tool": fn, "args": args, "model": model_key, "result_brief": brief})
             elif fn == "look_around":
+                model_key = session.get("last_model", config.DEFAULT_EMBED_MODEL)
+                store = get_store_fn(model_key)
                 out = _run_look_around(store, base, session.get("last_cands"), session.get("last_q_emb"),
                                         args.get("index"), args.get("before", 5), args.get("after", 5))
                 llm_frames = [{k: v for k, v in f.items() if k != "thumb"} for f in out.get("frames", [])]

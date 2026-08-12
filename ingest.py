@@ -75,6 +75,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--reset", action="store_true", help="清空並重建 collection")
+    ap.add_argument("--model", choices=list(config.EMBED_MODELS.keys()), default=config.DEFAULT_EMBED_MODEL,
+                    help="用哪組 embedding 模型（各自存在獨立 collection，見 config.EMBED_MODELS）")
     args = ap.parse_args()
 
     if not Path(args.video).exists():
@@ -84,8 +86,10 @@ def main():
     if not frames:
         sys.exit("沒有抽到任何影格。")
 
-    embedder = ClipEmbedder()
-    store = VectorStore()
+    mcfg = config.EMBED_MODELS[args.model]
+    embedder = ClipEmbedder(device="cpu", clip_model=mcfg["clip_model"],
+                             clip_pretrained=mcfg["clip_pretrained"])  # GPU 留給常駐的 VLM(llama-server)，避免 OOM
+    store = VectorStore(collection_name=mcfg["collection"])
     if args.reset:
         store.reset()
 
@@ -106,7 +110,7 @@ def main():
 
     # 存一份 manifest 方便 debug
     (config.ROOT / "last_ingest.json").write_text(
-        json.dumps({"video": video_name, "frames": len(frames)}, ensure_ascii=False, indent=2)
+        json.dumps({"video": video_name, "frames": len(frames), "model": args.model}, ensure_ascii=False, indent=2)
     )
 
 

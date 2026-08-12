@@ -9,20 +9,21 @@ import config
 
 
 class VectorStore:
-    def __init__(self):
+    def __init__(self, collection_name: str = None):
+        self.collection_name = collection_name or config.COLLECTION_NAME
         self.client = chromadb.PersistentClient(path=str(config.DB_DIR))
         self.collection = self.client.get_or_create_collection(
-            name=config.COLLECTION_NAME,
+            name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
     def reset(self):
         try:
-            self.client.delete_collection(config.COLLECTION_NAME)
+            self.client.delete_collection(self.collection_name)
         except Exception:
             pass
         self.collection = self.client.get_or_create_collection(
-            name=config.COLLECTION_NAME,
+            name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
