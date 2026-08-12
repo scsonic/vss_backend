@@ -330,8 +330,8 @@ SEARCH_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"
 a{color:#6cf} .wrap{max-width:1000px;margin:0 auto;padding:20px}
 nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px solid #262b36}
 h1{font-size:20px} .row{display:flex;gap:8px;margin:16px 0}
-input,button{font-size:15px;padding:10px;border-radius:8px;border:1px solid #333;background:#1b1f29;color:#eee}
-input[type=text]{flex:1} input[type=number]{width:90px} button{background:#2b6cff;border:0;cursor:pointer}
+input,button,select{font-size:15px;padding:10px;border-radius:8px;border:1px solid #333;background:#1b1f29;color:#eee}
+input[type=text]{flex:1} input[type=number]{width:90px} select{width:200px} button{background:#2b6cff;border:0;cursor:pointer}
 button:disabled{opacity:.5;cursor:default}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:12px}
 .card{background:#161922;border:1px solid #262b36;border-radius:10px;overflow:hidden}
@@ -390,6 +390,7 @@ button:disabled{opacity:.5;cursor:default}
 <div class="row">
   <input id="q" type="text" placeholder="例如：守門員撲救 / 進球慶祝 / 亂丟垃圾" onkeydown="if(event.key==='Enter')doSearch()">
   <input id="topn" type="number" value="10" min="1" max="30" title="top N">
+  <select id="model" title="要用哪組 embedding 模型查"></select>
   <button id="btn" onclick="doSearch()">搜尋</button>
 </div>
 <div id="results"></div>
@@ -435,19 +436,29 @@ function fmtUsage(u){if(!u||!u.total_tokens)return '';
 function addUsage(u){const t=fmtUsage(u); if(!t)return;
   const d=document.getElementById('chat');const el=document.createElement('div');el.className='muted';el.style.alignSelf='flex-start';el.textContent=t;d.appendChild(el);el.scrollIntoView()}
 
+async function loadModels(){
+  const d=await (await fetch('/api/dbinfo')).json();
+  const sel=document.getElementById('model');
+  sel.innerHTML=(d.embed_models||[]).map(m=>
+    '<option value="'+esc(m.key)+'"'+(m.default?' selected':'')+'>'+esc(m.label)+(m.default?'（預設）':'')+'</option>'
+  ).join('');
+}
+loadModels();
+
 async function doSearch(){
   const q=document.getElementById('q').value.trim(); if(!q)return;
   const topn=parseInt(document.getElementById('topn').value||'10');
+  const model=document.getElementById('model').value||undefined;
   document.getElementById('btn').disabled=true;
   document.getElementById('results').innerHTML='<p class="muted">搜尋中…</p>';
   document.getElementById('cosmos').style.display='none';
   document.getElementById('chat').innerHTML='';
   document.getElementById('chatbar').style.display='none';
-  const d=await post('/api/search',{query:q,top_n:topn});
+  const d=await post('/api/search',{query:q,top_n:topn,model:model});
   document.getElementById('btn').disabled=false;
   if(d.error){document.getElementById('results').innerHTML='<p class="muted">'+esc(d.error)+'</p>';return}
   SID=d.session_id; RESULTS=d.results;
-  let h='<h1>Top '+d.results.length+' 結果</h1><div class="grid">';
+  let h='<h1>Top '+d.results.length+' 結果 <span class="muted" style="font-size:13px">（model: '+esc(d.model||'')+'）</span></h1><div class="grid">';
   d.results.forEach((r,i)=>{var merged=(r.merged&&r.merged>1)?(' <span style="color:#e0a34a">·合併'+r.merged+'張 '+r.span+'</span>'):'';
     h+='<div class="card"><img loading="lazy" onclick="openLb('+i+')" src="'+r.thumb+'">'
     +'<div class="meta"><div class="tc">#'+(i+1)+' '+esc(r.video)+' <b>'+r.timecode+'</b>'+merged+'</div>'
@@ -584,7 +595,8 @@ async function load(){
     +'  -d \\'{"query": "有沒有人在亂丟垃圾", "top_n": 10, "model": "dfn5b"}\\'</pre>'
     +'<p class="k" style="width:auto"><code>model</code>（可選，預設 <code>dfn5b</code>）：要用哪組 embedding 模型查，'
     +'目前可用：'+d.embed_models.map(m=>'<code>'+esc(m.key)+'</code>（'+esc(m.label)+'）').join('、')
-    +'。兩組是完全獨立的資料庫，各自的相似度分數不能直接比較。</p>'
+    +'。兩組是完全獨立的資料庫，各自的相似度分數不能直接比較。'
+    +'網頁搜尋頁（<a href="/">/</a>）上也有下拉選單可以直接切換，不用自己組 curl。</p>'
     +'<p class="k" style="width:auto">回應：<code>{session_id, model, results: [{video, timecode, t_sec, score, thumb, mp4, filename, span, merged}]}</code>'
     +'　— <code>session_id</code> 要留著給下一步 /api/explain 用。</p>'
     +'<h4>2) POST /api/explain — 用 Cosmos Reason 解讀剛才的搜尋結果</h4>'
