@@ -77,6 +77,10 @@ def main():
     ap.add_argument("--reset", action="store_true", help="清空並重建 collection")
     ap.add_argument("--model", choices=list(config.EMBED_MODELS.keys()), default=config.DEFAULT_EMBED_MODEL,
                     help="用哪組 embedding 模型（各自存在獨立 collection，見 config.EMBED_MODELS）")
+    ap.add_argument("--device", default="cpu",
+                    help="cpu（預設，GPU 留給常駐的 VLM）或 cuda（要先確認 VLM 沒在跑、GPU 有空間）")
+    ap.add_argument("--batch-size", type=int, default=None,
+                    help="embedding 批次大小，預設用 config.EMBED_BATCH_SIZE；GPU 記憶體有限時可調小避免 OOM")
     args = ap.parse_args()
 
     if not Path(args.video).exists():
@@ -87,14 +91,14 @@ def main():
         sys.exit("沒有抽到任何影格。")
 
     mcfg = config.EMBED_MODELS[args.model]
-    embedder = ClipEmbedder(device="cpu", clip_model=mcfg["clip_model"],
-                             clip_pretrained=mcfg["clip_pretrained"])  # GPU 留給常駐的 VLM(llama-server)，避免 OOM
+    embedder = ClipEmbedder(device=args.device, clip_model=mcfg["clip_model"],
+                             clip_pretrained=mcfg["clip_pretrained"])
     store = VectorStore(collection_name=mcfg["collection"])
     if args.reset:
         store.reset()
 
     video_name = Path(args.video).name
-    embs = embedder.embed_images([fr["path"] for fr in frames])  # 批次嵌入(GPU)
+    embs = embedder.embed_images([fr["path"] for fr in frames], batch_size=args.batch_size)
     ids, metas = [], []
     for fr in frames:
         ids.append(f"{video_name}::{fr['t_sec']}")

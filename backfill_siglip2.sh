@@ -29,8 +29,8 @@ while true; do
     echo "=== no more pending videos, backfill done ===" | tee -a "$LOG"
     break
   fi
-  echo "=== siglip2-giant ingest: $name ===" | tee -a "$LOG"
-  ./.venv/bin/python ingest.py "video/${name}" --model siglip2-giant >> "$LOG" 2>&1
+  echo "=== siglip2-giant ingest: $name (GPU) ===" | tee -a "$LOG"
+  ./.venv/bin/python ingest.py "video/${name}" --model siglip2-giant --device cuda --batch-size 8 >> "$LOG" 2>&1
   if [ $? -ne 0 ]; then
     echo "INGEST FAILED: $name" | tee -a "$LOG"
     echo "$name (ingest failed)" >> "$FAILED"
@@ -38,3 +38,10 @@ while true; do
 done
 
 echo "=== ALL SIGLIP2 BACKFILL DONE ===" | tee -a "$LOG"
+
+# backfill 跑完了，把 GPU 讓出來的 Cosmos VLM(llama-server) 重新啟動。
+echo "=== restarting VLM (llama-server) ===" | tee -a "$LOG"
+cd /home/toyota-004/Desktop/vss_test
+nohup bash serve_vlm.sh > vlm.log 2>&1 &
+disown
+echo "=== VLM restart requested ===" | tee -a "$LOG"
