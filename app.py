@@ -318,6 +318,11 @@ def page_agent():
     return AGENT_HTML
 
 
+@app.get("/how-to-use-api", response_class=HTMLResponse)
+def page_howto():
+    return HOWTO_HTML
+
+
 SEARCH_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>影片語意搜尋</title><style>
@@ -366,7 +371,7 @@ button:disabled{opacity:.5;cursor:default}
 #vov .stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
 #vov .stage video{max-width:94vw;max-height:86vh}
 </style></head><body>
-<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a><a href="/how-to-use-api">API 用法</a></nav>
 <div id="lb">
   <div class="top"><span id="lb-cap"></span><span class="close" onclick="closeLb()">✕</span></div>
   <div class="stage">
@@ -493,13 +498,14 @@ nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px
 pre{background:#0d0f14;border:1px solid #262b36;border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.6}
 code{color:#e0a34a} h3{margin-bottom:10px} .api h4{margin:16px 0 6px}
 </style></head><body>
-<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a><a href="/how-to-use-api">API 用法</a></nav>
 <div class="wrap">
 <h1>資料庫資訊</h1>
 <div id="sys"></div>
 <h2>影片清單</h2>
 <div id="vids" class="grid"></div>
-<div id="api" class="panel api"></div>
+<div class="panel"><h3>API 呼叫方式</h3>
+<p class="k" style="width:auto">已搬到獨立頁面：<a href="/how-to-use-api">/how-to-use-api →</a></p></div>
 </div>
 <script>
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
@@ -523,7 +529,31 @@ async function load(){
     +'<div class="meta"><b>'+esc(v.video)+'</b><br>影格 '+v.frames+' 張<br>長度 ~'+v.duration
     +'<br><a href="'+v.mp4+'" target="_blank">原始 mp4 ↗</a></div></div>'});
   document.getElementById('vids').innerHTML=h;
+}
+load();
+</script></body></html>"""
 
+
+HOWTO_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API 用法</title><style>
+*{box-sizing:border-box} body{font-family:-apple-system,"PingFang TC",sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
+a{color:#6cf} .wrap{max-width:1000px;margin:0 auto;padding:20px}
+nav{display:flex;gap:16px;padding:12px 20px;background:#161922;border-bottom:1px solid #262b36}
+.panel{background:#161922;border:1px solid #262b36;border-radius:12px;padding:16px;margin-top:16px}
+.k{color:#8a93a3;display:inline-block;width:120px} b{color:#fff}
+pre{background:#0d0f14;border:1px solid #262b36;border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+code{color:#e0a34a} h3{margin-bottom:10px} .api h4{margin:16px 0 6px}
+</style></head><body>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a><a href="/how-to-use-api">API 用法</a></nav>
+<div class="wrap">
+<h1>API 用法</h1>
+<div id="api" class="panel api"></div>
+</div>
+<script>
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function load(){
+  const d=await (await fetch('/api/dbinfo')).json();
   const origin=location.origin;
   document.getElementById('api').innerHTML=
     '<h3>API 呼叫方式</h3>'
@@ -618,7 +648,7 @@ input,button{font-size:15px;padding:10px;border-radius:8px;border:1px solid #333
 input[type=text]{flex:1} button{background:#2b6cff;border:0;cursor:pointer}
 button:disabled{opacity:.5;cursor:default}
 </style></head><body>
-<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a></nav>
+<nav><b>🎬 影片搜尋</b><a href="/">搜尋</a><a href="/agent">Agent Search</a><a href="/dbinfo">資料庫資訊</a><a href="/how-to-use-api">API 用法</a></nav>
 <div class="wrap">
 <h1>🤖 Agent Search</h1>
 <p class="sub">萬用影片搜尋 agent：直接跟它聊，它會自己判斷要不要搜尋、搜什麼、要不要往前後多看幾張影格
