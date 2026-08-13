@@ -39,8 +39,18 @@ EMBED_MODELS = {
         "clip_pretrained": "webli",
         "collection": "video_frames_siglip2_giant",
     },
+    # NVIDIA Cosmos-Embed1-448p：跟前兩個不一樣，是「video-clip」embedding（吃 8 張連續影格算一個
+    # embedding，不是單張圖片），自訂 modeling 程式碼只認 transformers==4.51.3，跟本專案主 venv
+    # 現在用的 transformers 版本不相容，所以獨立跑在 cosmos_embed_server.py 這支 sidecar
+    # （見 COSMOS_EMBED_SERVER_URL），app.py/ingest 都是透過 HTTP 呼叫，不在主 process 內 load 模型。
+    "cosmos-embed1-448p": {
+        "label": "Cosmos-Embed1-448p（NVIDIA，video-clip embedding）",
+        "family": "cosmos_embed1",
+        "collection": "video_frames_cosmos_embed1_448p",
+    },
 }
 DEFAULT_EMBED_MODEL = "siglip2-giant"
+COSMOS_EMBED_SERVER_URL = "http://127.0.0.1:8090"
 
 # --- VLM（/api/explain、/api/chat 用；已改用 OpenRouter，見下面「Agent Search」區塊的
 # OPENROUTER_* 設定 —— 跟 agent_search.py 共用同一顆模型，純文字推理、不看畫面）---

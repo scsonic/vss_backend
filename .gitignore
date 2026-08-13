@@ -1,5 +1,6 @@
 # 虛擬環境
 .venv/
+.venv-cosmosembed/
 __pycache__/
 *.pyc
 

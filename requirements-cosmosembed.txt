@@ -1,0 +1,20 @@
+# Cosmos-Embed1-448p sidecar（cosmos_embed_server.py）專用的獨立環境。
+#
+# 這顆模型的 trust_remote_code 自訂 modeling 程式碼只認 transformers==4.51.3，
+# 跟本專案主 venv（requirements.txt，給 SigLIP2 tokenizer 用）現在裝的新版 transformers
+# 不相容，所以獨立開一個 venv 裝這份，別跟主 venv 混在一起。
+#
+# 建立方式：
+#   python3.12 -m venv .venv-cosmosembed
+#   .venv-cosmosembed/bin/pip install torch==2.13.0 torchvision==0.28.0 \
+#       --index-url https://download.pytorch.org/whl/cu130
+#   .venv-cosmosembed/bin/pip install -r requirements-cosmosembed.txt
+#
+# 啟動： bash serve_cosmos_embed.sh
+
+transformers==4.51.3
+einops
+fastapi
+uvicorn[standard]
+pillow
+numpy

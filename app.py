@@ -51,13 +51,18 @@ SESSIONS: dict[str, dict] = {}
 AGENT_SESSIONS: dict[str, dict] = {}
 
 
-def get_embedder(model_key: str = None) -> ClipEmbedder:
+def get_embedder(model_key: str = None):
+    """依 model_key 回傳對應的 embedder 單例；不同 family 用不同實作（見 config.EMBED_MODELS）。"""
     model_key = model_key or config.DEFAULT_EMBED_MODEL
     if model_key not in _embedders:
         mcfg = config.EMBED_MODELS[model_key]
-        # CPU：查詢只需單張 embedding（夠快），把 GPU 記憶體整個留給 Cosmos VLM。
-        _embedders[model_key] = ClipEmbedder(device="cpu", clip_model=mcfg["clip_model"],
-                                              clip_pretrained=mcfg["clip_pretrained"])
+        if mcfg.get("family") == "cosmos_embed1":
+            from cosmos_embed import CosmosEmbedder
+            _embedders[model_key] = CosmosEmbedder()
+        else:
+            # CPU：查詢只需單張 embedding（夠快），不用佔用 GPU 記憶體。
+            _embedders[model_key] = ClipEmbedder(device="cpu", clip_model=mcfg["clip_model"],
+                                                  clip_pretrained=mcfg["clip_pretrained"])
     return _embedders[model_key]
 
 
@@ -167,7 +172,10 @@ def api_search(req: SearchReq, request: Request):
     store = get_store(req.model)
     if store.count() == 0:
         return JSONResponse({"error": "資料庫是空的"}, status_code=400)
-    q_emb = get_embedder(req.model).embed_text(req.query)
+    try:
+        q_emb = get_embedder(req.model).embed_text(req.query)
+    except Exception as e:
+        return JSONResponse({"error": f"embedding 模型錯誤：{e}"}, status_code=503)
     # 多撈一個 pool 再做「相鄰影格合併」，最後回 top_n 筆不同片段
     pool = min(store.count(), max(req.top_n * 8, 60))
     hits = store.query(q_emb, pool)
@@ -608,7 +616,7 @@ async function load(){
     +'  -d \\'{"query": "有沒有人在亂丟垃圾", "top_n": 10, "model": "siglip2-giant"}\\'</pre>'
     +'<p class="k" style="width:auto"><code>model</code>（可選，預設 <code>siglip2-giant</code>）：要用哪組 embedding 模型查，'
     +'目前可用：'+d.embed_models.map(m=>'<code>'+esc(m.key)+'</code>（'+esc(m.label)+'）').join('、')
-    +'。兩組是完全獨立的資料庫，各自的相似度分數不能直接比較。'
+    +'。每組是完全獨立的資料庫，各自的相似度分數不能直接比較。'
     +'網頁搜尋頁（<a href="/">/</a>）上也有下拉選單可以直接切換，不用自己組 curl。</p>'
     +'<p class="k" style="width:auto">回應：<code>{session_id, model, results: [{video, timecode, t_sec, score, thumb, mp4, filename, span, merged}]}</code>'
     +'　— <code>session_id</code> 要留著給下一步 /api/explain 用。</p>'
@@ -628,7 +636,8 @@ async function load(){
     +'及 <code>look_around</code>（往前後多看幾張影格的相似度），呼叫完再統整成英文回覆（即使你用中文問也一樣）。'
     +'全程只用 CLIP embedding 相似度，不呼叫視覺模型（VLM），速度快但答案只反映畫面特徵相似度、不是真的「看懂」畫面。'
     +'agent 呼叫 <code>search_video</code> 時可以自己選要查哪組 embedding 模型（預設 <code>siglip2-giant</code>，'
-    +'使用者明確要求時可改用 <code>dfn5b</code>）——不用你手動傳，這是 agent 自己在 tool call 裡帶的參數。</p>'
+    +'使用者明確要求時可改用其他組：'+d.embed_models.map(m=>'<code>'+esc(m.key)+'</code>').join('、')
+    +'）——不用你手動傳，這是 agent 自己在 tool call 裡帶的參數。</p>'
     +'<pre>curl -X POST '+origin+'/api/agent_chat \\\n'
     +'  -H "Content-Type: application/json" \\\n'
     +'  -d \\'{"session_id": null, "message": "有沒有人在亂丟垃圾？"}\\'</pre>'

@@ -27,11 +27,12 @@ SYSTEM_PROMPT = """你是一個「萬用影片搜尋助理」，背後是影片�
    所以 query 請儘量用英文下（就算使用者是用中文問你），例如使用者問「有沒有人闖紅燈」，
    你應該下 "person crossing street against red light" 之類的英文描述，而不是中文。
    必要時可以連續呼叫多次、用不同角度/關鍵字(仍然用英文)去找，增加找到的機會。
-   model 是要用哪組 embedding 模型查，兩組是完全獨立的資料庫：
+   model 是要用哪組 embedding 模型查，幾組是完全獨立的資料庫：
      - "siglip2-giant"（預設，不指定就是用這個）
      - "dfn5b"
+     - "cosmos-embed1-448p"（NVIDIA 的 video-clip embedding，跟前兩個原理不同）
    不用主動切換，維持預設就好；只有使用者明確要求指定模型時才改用另一個。
-   如果同一件事在其中一個模型都找不到，也可以換另一個模型再試一次。
+   如果同一件事在預設模型都找不到，也可以換另一個模型再試一次。
 
 2) look_around(index, before, after)
    針對「最近一次 search_video」結果裡的某一筆（index 是結果的 #編號，從 1 開始），
@@ -62,7 +63,7 @@ SEARCH_TOOL = {
                                                              "請用英文（CLIP 模型是英文語料訓練，英文查詢效果明顯較好）"},
                 "top_n": {"type": "integer", "description": "回傳幾筆結果，預設 10"},
                 "model": {"type": "string", "enum": list(config.EMBED_MODELS.keys()),
-                          "description": "要用哪組 embedding 模型查，預設 siglip2-giant，兩組是各自獨立的資料庫"},
+                          "description": "要用哪組 embedding 模型查，預設 siglip2-giant，各組是各自獨立的資料庫"},
             },
             "required": ["query"],
         },
@@ -186,7 +187,7 @@ def run_agent_turn(session: dict, user_message: str, *, get_store_fn, get_embedd
     """在既有 agent session 上跑一輪對話（含工具呼叫迴圈）。
 
     get_store_fn / get_embedder_fn：傳 model_key 進去，回傳對應模型的 VectorStore / ClipEmbedder
-    單例（見 app.py 的 get_store/get_embedder）——因為兩組 embedding 模型各自有獨立資料庫，
+    單例（見 app.py 的 get_store/get_embedder）——因為每組 embedding 模型各自有獨立資料庫，
     要由每次 search_video 呼叫時帶的 model 參數決定要用哪一組。
 
     session 結構：{"messages": [...OpenRouter 對話格式...],
