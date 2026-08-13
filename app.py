@@ -1,12 +1,12 @@
-"""FastAPI 測試站：影片語意搜尋 + Cosmos-Reason2 對話。
+"""FastAPI 測試站：影片語意搜尋 + LLM 對話解讀。
 
 頁面：
   /         搜尋頁：輸入文字 + top N(預設10) → 顯示 top N(縮圖/score/檔名)
-            → 下方 Cosmos Reason「準備中」→ 完成後出現對話框，可續問。
+            → 按「Ask Agent」才會呼叫 LLM（OpenRouter DeepSeek，純文字、不看畫面）解讀 → 可續問。
             （同一次開啟的分頁保留對話；重新整理即開新對話。）
   /dbinfo   資料庫資訊頁：有哪些影片(封面)、向量資料庫、使用的 AI 模型。
 
-啟動： bash serve_web.sh   （需先 bash serve_vlm.sh 開 Cosmos 服務）
+啟動： bash serve_web.sh
 """
 import json
 import re
@@ -22,6 +22,7 @@ from pydantic import BaseModel
 import agent_search
 import config
 import transcribe
+import vlm as vlm_module
 from embedder import ClipEmbedder
 from store import VectorStore
 
@@ -68,12 +69,11 @@ def get_store(model_key: str = None) -> VectorStore:
     return _stores[model_key]
 
 
-def get_vlm():
-    """可能因 llama-server 未啟動而丟例外。"""
+def get_vlm() -> vlm_module.Vlm:
+    """可能因 OPENROUTER_API_KEY 未設定而丟 vlm_module.VlmError。"""
     global _vlm
     if _vlm is None:
-        from vlm import Vlm
-        _vlm = Vlm()
+        _vlm = vlm_module.Vlm()
     return _vlm
 
 
@@ -190,9 +190,12 @@ def api_explain(req: SidReq, request: Request):
         return JSONResponse({"error": "session 不存在（可能已重新整理）"}, status_code=404)
     try:
         vlm = get_vlm()
-    except Exception as e:
-        return JSONResponse({"error": f"Cosmos 服務未啟動：{e}"}, status_code=503)
-    result = vlm.explain(s["query"], s["cands"], image_size=req.image_size)
+    except vlm_module.VlmError as e:
+        return JSONResponse({"error": f"VLM 服務未設定：{e}"}, status_code=503)
+    try:
+        result = vlm.explain(s["query"], s["cands"], image_size=req.image_size)
+    except vlm_module.VlmError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
     s["messages"] = result["messages"]
     s["explained"] = True
     base = public_base(request)
@@ -218,9 +221,12 @@ def api_chat(req: ChatReq):
         return JSONResponse({"error": "請先完成搜尋與 Cosmos 分析"}, status_code=400)
     try:
         vlm = get_vlm()
-    except Exception as e:
-        return JSONResponse({"error": f"Cosmos 服務未啟動：{e}"}, status_code=503)
-    answer, trace, usage = vlm.ask(s["messages"], req.message)
+    except vlm_module.VlmError as e:
+        return JSONResponse({"error": f"VLM 服務未設定：{e}"}, status_code=503)
+    try:
+        answer, trace, usage = vlm.ask(s["messages"], req.message)
+    except vlm_module.VlmError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
     return {"answer": answer, "trace": trace, "usage": usage}
 
 
@@ -296,9 +302,8 @@ def api_dbinfo(request: Request):
         "total_frames": len(metas),
         "vectordb": {"engine": "ChromaDB", "metric": "cosine", "index": "HNSW"},
         "embed_models": embed_models,
-        "models": {"vlm": "NVIDIA Cosmos-Reason2-8B (GGUF Q4_K_M, llama.cpp)"},
-        "params": {"frame_interval_sec": config.FRAME_INTERVAL_SEC,
-                   "vlm_img_max_px": config.VLM_IMG_MAX_PX},
+        "models": {"vlm": f"{config.OPENROUTER_MODEL}（OpenRouter，純文字推理，不看畫面，同 Agent Search）"},
+        "params": {"frame_interval_sec": config.FRAME_INTERVAL_SEC},
     }
 
 
@@ -477,12 +482,11 @@ async function doSearch(){
 async function runExplain(){
   document.getElementById('askbtn').disabled=true;
   document.getElementById('cosmos').style.display='block';
-  document.getElementById('cosmos-status').innerHTML='<span class="spin"></span> Cosmos Reason 準備中…（逐格解析／過濾／綜合，可能數分鐘）';
+  document.getElementById('cosmos-status').innerHTML='<span class="spin"></span> Agent 整理搜尋結果中…';
   const e=await post('/api/explain',{session_id:SID});
   document.getElementById('askbtn').disabled=false;
   if(e.error){document.getElementById('cosmos-status').innerHTML='⚠️ '+esc(e.error);return}
-  let info='✅ Cosmos 分析完成';
-  if(e.trace&&e.trace.length)info+='（期間呼叫 look_around '+e.trace.length+' 次看前後張）';
+  let info='✅ 分析完成';
   if(e.usage&&e.usage.total_tokens)info+='<br><span class="muted">'+fmtUsage(e.usage)+'</span>';
   document.getElementById('cosmos-status').innerHTML=info;
   addMsg('bot',e.answer);
@@ -608,16 +612,16 @@ async function load(){
     +'網頁搜尋頁（<a href="/">/</a>）上也有下拉選單可以直接切換，不用自己組 curl。</p>'
     +'<p class="k" style="width:auto">回應：<code>{session_id, model, results: [{video, timecode, t_sec, score, thumb, mp4, filename, span, merged}]}</code>'
     +'　— <code>session_id</code> 要留著給下一步 /api/explain 用。</p>'
-    +'<h4>2) POST /api/explain — 用 Cosmos Reason 解讀剛才的搜尋結果</h4>'
+    +'<h4>2) POST /api/explain — 用 LLM 解讀剛才的搜尋結果</h4>'
     +'<pre>curl -X POST '+origin+'/api/explain \\\n'
     +'  -H "Content-Type: application/json" \\\n'
-    +'  -d \\'{"session_id": "上一步拿到的 session_id", "image_size": 480}\\'</pre>'
-    +'<p class="k" style="width:auto"><code>image_size</code>（可選，預設 480）：送進 LLM 前，每張圖片長邊縮到這個'
-    +'像素以內再送進去，加快推論；只會往下縮、保持長寬比、不會放大原圖。傳 0 或負數則不限制。</p>'
+    +'  -d \\'{"session_id": "上一步拿到的 session_id"}\\'</pre>'
+    +'<p class="k" style="width:auto">用 '+esc(d.models.vlm)+'（跟 /api/agent_chat 同一顆模型）'
+    +'依候選片段的時間碼、相似度分數做綜合總結——純文字推理，不會實際看畫面，'
+    +'<code>image_size</code> 參數保留相容舊版呼叫方式但已不使用。</p>'
     +'<p class="k" style="width:auto">回應：<code>{answer, kept: [{video, timecode, thumb, mp4}], captions, trace, timings, '
     +'usage: {prompt_tokens, completion_tokens, total_tokens, tokens_per_sec}}</code>'
-    +'　— <code>answer</code> 是英文總結；<code>usage</code> 是這次呼叫 Cosmos 用掉的 token 數與生成速度。'
-    +'此步驟需要 VLM 服務（serve_vlm.sh）已啟動，可能需數十秒到數分鐘。</p>'
+    +'　— <code>answer</code> 是英文總結；<code>usage</code> 是這次呼叫 LLM 用掉的 token 數與生成速度。</p>'
     +'<h4>3) POST /api/agent_chat — 跟萬用影片搜尋 agent 聊天</h4>'
     +'<p class="k" style="width:auto">單一支 API 就是完整聊天介面：把使用者訊息丟進去，agent（OpenRouter '
     +'deepseek/deepseek-v4-flash-0731）會自己判斷要不要呼叫 <code>search_video</code>（embedding 語意搜尋）'

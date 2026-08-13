@@ -42,18 +42,9 @@ EMBED_MODELS = {
 }
 DEFAULT_EMBED_MODEL = "siglip2-giant"
 
-# --- VLM ---
-# NVIDIA Cosmos-Reason2-8B（reasoning VLM，Qwen3-VL 底）GGUF Q4_K_M，
-# 由 llama-server(Metal 加速) 提供服務；vlm.py 透過 HTTP API 呼叫。
-# 啟動：bash serve_vlm.sh
-VLM_SERVER_URL = "http://127.0.0.1:8080"
-# 搜到影格後，會回原始 mp4 用時間碼重新擷取高畫質影格再送 VLM（hires.py）。
-USE_HIRES_FRAMES = True
-# 送進 VLM 前把影格縮到最長邊此像素；None = 送 mp4 原始解析度（最清楚，但 1080p 每張約 147s）。
-# 實測折衷：1280 幾乎等同原始細節（招牌小字可讀）但每張僅約 39s；1024 約 19s；1080p(None) 約 147s。
-VLM_IMG_MAX_PX = 1280
-VLM_MAX_TOOL_HOPS = 3       # look_around 這類工具最多連續呼叫幾次，避免無限迴圈
-# 舊版 MLX 2B（保留參考）：VLM_MODEL = "hzang/Cosmos-Reason2-2B-4bit"
+# --- VLM（/api/explain、/api/chat 用；已改用 OpenRouter，見下面「Agent Search」區塊的
+# OPENROUTER_* 設定 —— 跟 agent_search.py 共用同一顆模型，純文字推理、不看畫面）---
+# 舊版本機 Cosmos-Reason2-8B + llama-server 已停用（GPU 讓給 embedding 用），vlm.py 不再需要它。
 
 # --- 嵌入批次 ---
 EMBED_BATCH_SIZE = 32       # 一次丟幾張到 GPU forward（越大越快、越吃記憶體；OOM 就調小）
