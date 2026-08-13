@@ -394,6 +394,9 @@ button:disabled{opacity:.5;cursor:default}
   <button id="btn" onclick="doSearch()">搜尋</button>
 </div>
 <div id="results"></div>
+<div id="askbar" class="row" style="display:none">
+  <button id="askbtn" onclick="runExplain()">🤖 Ask Agent with these images</button>
+</div>
 <div id="cosmos" class="section" style="display:none">
   <div id="cosmos-status"><span class="spin"></span> Cosmos Reason 準備中…（正在逐格解析、過濾、綜合，可能需數分鐘）</div>
   <div id="chat" class="chat"></div>
@@ -451,6 +454,7 @@ async function doSearch(){
   const model=document.getElementById('model').value||undefined;
   document.getElementById('btn').disabled=true;
   document.getElementById('results').innerHTML='<p class="muted">搜尋中…</p>';
+  document.getElementById('askbar').style.display='none';
   document.getElementById('cosmos').style.display='none';
   document.getElementById('chat').innerHTML='';
   document.getElementById('chatbar').style.display='none';
@@ -467,10 +471,15 @@ async function doSearch(){
     +'<button class="btn-video" onclick="openVov('+i+')">影片</button></div></div>'});
   h+='</div>';
   document.getElementById('results').innerHTML=h;
-  // 啟動 Cosmos
+  if(d.results.length)document.getElementById('askbar').style.display='flex';
+}
+
+async function runExplain(){
+  document.getElementById('askbtn').disabled=true;
   document.getElementById('cosmos').style.display='block';
   document.getElementById('cosmos-status').innerHTML='<span class="spin"></span> Cosmos Reason 準備中…（逐格解析／過濾／綜合，可能數分鐘）';
   const e=await post('/api/explain',{session_id:SID});
+  document.getElementById('askbtn').disabled=false;
   if(e.error){document.getElementById('cosmos-status').innerHTML='⚠️ '+esc(e.error);return}
   let info='✅ Cosmos 分析完成';
   if(e.trace&&e.trace.length)info+='（期間呼叫 look_around '+e.trace.length+' 次看前後張）';
