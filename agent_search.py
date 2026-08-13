@@ -95,17 +95,18 @@ class AgentError(RuntimeError):
     pass
 
 
-def _call_openrouter(messages: list[dict], max_tokens: int = 1500) -> dict:
+def _call_openrouter(messages: list[dict], max_tokens: int = 1500, use_tools: bool = True) -> dict:
     if not config.OPENROUTER_API_KEY:
         raise AgentError("尚未設定 OPENROUTER_API_KEY（見 local_secrets.py 或環境變數）")
     payload = {
         "model": config.OPENROUTER_MODEL,
         "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
         "max_tokens": max_tokens,
         "temperature": 0.3,
     }
+    if use_tools:
+        payload["tools"] = TOOLS
+        payload["tool_choice"] = "auto"
     req = urllib.request.Request(
         config.OPENROUTER_URL,
         data=json.dumps(payload).encode(),
@@ -262,12 +263,16 @@ def run_agent_turn(session: dict, user_message: str, *, get_store_fn, get_embedd
             messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
                               "name": fn, "content": result_text})
 
-    # 超過 hop 上限，強制不帶工具做最後總結
-    resp = _call_openrouter(messages)
+    # 超過 hop 上限，強制不帶工具做最後總結（use_tools=False：不然模型還是可能選擇再呼叫一次工具
+    # 而不是回答，導致 content 是空的、只能顯示下面這句 fallback 文字）
+    resp = _call_openrouter(messages, use_tools=False)
     u = resp.get("usage") or {}
     usage_total["prompt_tokens"] += u.get("prompt_tokens", 0)
     usage_total["completion_tokens"] += u.get("completion_tokens", 0)
     usage_total["total_tokens"] += u.get("total_tokens", 0)
-    answer = resp["choices"][0]["message"].get("content") or "（已達工具呼叫上限，且沒有取得回覆內容）"
+    msg = resp["choices"][0]["message"]
+    # 推理模型有時把 max_tokens 都花在 reasoning 上，content 被截斷成空字串；
+    # 這種情況退而求其次顯示 reasoning 摘要，總比空白回覆好。
+    answer = msg.get("content") or msg.get("reasoning") or "（已達工具呼叫上限，且沒有取得回覆內容）"
     messages.append({"role": "assistant", "content": answer})
     return {"answer": answer, "trace": trace, "usage": usage_total}
