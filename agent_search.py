@@ -97,7 +97,7 @@ class AgentError(RuntimeError):
 
 def _call_openrouter(messages: list[dict], max_tokens: int = 1500, use_tools: bool = True) -> dict:
     if not config.OPENROUTER_API_KEY:
-        raise AgentError("尚未設定 OPENROUTER_API_KEY（見 local_secrets.py 或環境變數）")
+        raise AgentError("OPENROUTER_API_KEY is not set (see local_secrets.py or the environment variable).")
     payload = {
         "model": config.OPENROUTER_MODEL,
         "messages": messages,
@@ -122,7 +122,7 @@ def _call_openrouter(messages: list[dict], max_tokens: int = 1500, use_tools: bo
             return json.load(r)
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
-        raise AgentError(f"OpenRouter API 錯誤 {e.code}：{body[:500]}")
+        raise AgentError(f"OpenRouter API error {e.code}: {body[:500]}")
 
 
 def _run_search(store, embedder, base: str, query: str, top_n: int = 10) -> tuple[list[dict], list[dict], list[float]]:
@@ -148,10 +148,10 @@ def _cosine(a: list[float], b: list[float]) -> float:
 def _run_look_around(store, base: str, cands: list[dict], q_emb: list[float],
                       index: int, before: int = 5, after: int = 5) -> dict:
     if not cands or q_emb is None:
-        return {"error": "還沒有 search_video 的結果可以往前後看，請先呼叫 search_video。"}
+        return {"error": "No search_video results yet to look around — call search_video first."}
     i = int(index) - 1
     if i < 0 or i >= len(cands):
-        return {"error": f"index 超出範圍，最近一次 search_video 只有 {len(cands)} 筆結果。"}
+        return {"error": f"index out of range — the last search_video only returned {len(cands)} result(s)."}
     cand = cands[i]
     video, t_sec = cand["video"], cand["t_sec"]
     center_idx = round(t_sec / config.FRAME_INTERVAL_SEC)
