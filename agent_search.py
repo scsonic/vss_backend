@@ -217,7 +217,7 @@ def run_agent_turn(session: dict, user_message: str, *, get_store_fn, get_embedd
         tool_calls = msg.get("tool_calls")
 
         if not tool_calls:
-            answer = msg.get("content") or "（沒有取得回覆內容）"
+            answer = msg.get("content") or "(No reply content was returned.)"
             messages.append({"role": "assistant", "content": answer})
             return {"answer": answer, "trace": trace, "usage": usage_total}
 
@@ -273,6 +273,6 @@ def run_agent_turn(session: dict, user_message: str, *, get_store_fn, get_embedd
     msg = resp["choices"][0]["message"]
     # 推理模型有時把 max_tokens 都花在 reasoning 上，content 被截斷成空字串；
     # 這種情況退而求其次顯示 reasoning 摘要，總比空白回覆好。
-    answer = msg.get("content") or msg.get("reasoning") or "（已達工具呼叫上限，且沒有取得回覆內容）"
+    answer = msg.get("content") or msg.get("reasoning") or "(Reached the tool-call limit and no reply content was returned.)"
     messages.append({"role": "assistant", "content": answer})
     return {"answer": answer, "trace": trace, "usage": usage_total}
